@@ -24,7 +24,7 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
-#include <livox_ros_driver2/msg/custom_msg.hpp>
+#include "livox_ros_driver2/msg/custom_msg.hpp"
 #include <pcl_conversions/pcl_conversions.h>
 
 /// msgs

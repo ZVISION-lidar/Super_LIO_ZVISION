@@ -22,7 +22,6 @@ find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
-find_package(livox_ros_driver2 REQUIRED)
 
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(PCL REQUIRED)
@@ -48,6 +47,7 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
   ${Glog_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIRS}
 )
 
 file(GLOB_RECURSE LIO_LIB_SRC "src/lio/*.cpp" "src/ros/*.cpp")
@@ -63,9 +63,9 @@ ament_target_dependencies(lio PUBLIC
   visualization_msgs
   nav_msgs
   pcl_ros
-  livox_ros_driver2
   basic
   rosidl_default_runtime
+  Boost
 )
 
 target_link_libraries(lio PUBLIC
@@ -123,3 +123,4 @@ install(DIRECTORY rviz/
 )
 
 ament_package()
+
