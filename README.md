@@ -29,7 +29,7 @@ sudo apt install libgoogle-glog-dev libtbb-dev
 
 ### Build & Run
 ```bash
-git clone https://github.com/Liansheng-Wang/Super-LIO.git
+git clone https://github.com/ZVISION-lidar/Super_LIO_ZVISION.git
 cd Super-LIO
 colcon build
 
