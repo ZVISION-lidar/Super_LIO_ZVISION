@@ -129,7 +129,8 @@ bool SuperLIO::kf_init(){
   }
 
   V3 gravity = - mean_acce * g_gravity_norm / mean_acce.norm();
-  V3 ref_gravity(0, 0, - g_gravity_norm);
+  // V3 ref_gravity(0, 0, - g_gravity_norm);
+  V3 ref_gravity = g_kf_align_gravity ?  gravity : V3(0, 0, - g_gravity_norm);
   M3 init_rot = Quat::FromTwoVectors(gravity, ref_gravity).toRotationMatrix();
   V3 n = init_rot.col(0);
   double yaw = atan2(n(1), n(0));
