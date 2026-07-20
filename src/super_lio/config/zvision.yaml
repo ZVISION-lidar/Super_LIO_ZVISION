@@ -1,40 +1,35 @@
 /**:
   ros__parameters:
     lio.map.save_map: false     #是否保存地图
-    lio.map.if_filter: true     #是否保存地图时降采样
+    lio.map.if_filter: true     #是否保存地图时降采样，false不降采样，true降采样
     lio.map.save_map_dir: "map" #保存地图路径
     lio.map.map_name: "map.pcd" #保存地图名称
     lio.map.ds_size: 0.5        #降采样参数，数值越大过滤程度越高
     lio.map.save_interval: -1   # -1：直接保存成一个map ； 500：每500帧保存一次子图，最后拼接成完整map
 
-    lio.ros.lidar_topic: "/zvlidar_points_xyzirt"
-    lio.ros.imu_topic: "/zvlidar_imu_msg"
-    # lio.ros.lidar_topic: "/zvlidar_sdk_test/zvlidar_points_xyzirt"
-    # lio.ros.imu_topic: "/zvlidar_sdk_test/zvlidar_imu_msg"
+    lio.ros.lidar_topic: "/zvlidar_points_xyzirt"  #雷达话题
+    lio.ros.imu_topic: "/zvlidar_imu_msg"          #IMU话题
 
-
-
-    lio.sensor.lidar_type: 8
-    lio.sensor.blind: 0.3
-    lio.sensor.maxrange: 150.0
-    lio.sensor.filter_rate: 1
-    lio.sensor.enable_downsample: false   #lio中是否降采用
+    lio.sensor.lidar_type: 8              #雷达类型
+    lio.sensor.blind: 0.3                 #雷达盲区
+    lio.sensor.maxrange: 150.0            #雷达最大距离
+    lio.sensor.filter_rate: 1             #雷达滤波率
+    lio.sensor.enable_downsample: false   #lio中是否降采样，false不降采样，true降采样
     lio.sensor.voxel_fliter_size: 0.5     #lio中降采样参数
-    lio.sensor.gravity_norm: 9.7946
-    lio.sensor.imu_type: 1
-    lio.sensor.imu_na: 0.1
-    lio.sensor.imu_ng: 0.1
-    lio.sensor.imu_nba: 0.001
-    lio.sensor.imu_nbg: 0.001
+    lio.sensor.gravity_norm: 9.7946       #重力加速度
+    lio.sensor.imu_type: 1                #IMU类型，默认6轴
+    lio.sensor.imu_na: 0.1                #IMU噪声参数
+    lio.sensor.imu_ng: 0.1                #IMU噪声参数
+    lio.sensor.imu_nba: 0.001             #IMU偏置参数
+    lio.sensor.imu_nbg: 0.001             #IMU偏置参数
 
-   # lio.extrinsic.lidar_imu: [-0.0026, -0.05527, 0.0193,   #NZ1
+   # lio.extrinsic.lidar_imu: [-0.0026, -0.05527, 0.0193,   #NZ1 外参
     lio.extrinsic.lidar_imu: [-0.0026, -0.06545, 0.0161,     #NZ3/5/MT 外参
                               1.0, 0.0, 0.0,
                               0.0, 1.0, 0.0,
                               0.0, 0.0, 1.0]           
 
     lio.extrinsic.odom_robo: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
     lio.hash_map.hash_capacity: 100000000
     lio.hash_map.vox_resolution: 0.2
 
@@ -49,6 +44,6 @@
     lio.output.planner: false
     lio.output.map: true
     lio.output.dense: false
-    lio.output.pub_step: 1    # 每*帧pub一次
+    lio.output.pub_step: 1    # 每*帧发布一次
 
-    lio.eva.timer: true
+    lio.eva.timer: true    #是否开启评估计时器，true开启，false关闭
