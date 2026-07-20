@@ -108,6 +108,7 @@ void SuperLIO::process(){
   if(!data_wrapper_->sync_measure(measures_)){
     return;
   }
+  
   (this->*state_fn_)();
 }
 
@@ -130,7 +131,7 @@ bool SuperLIO::kf_init(){
 
   V3 gravity = - mean_acce * g_gravity_norm / mean_acce.norm();
   // V3 ref_gravity(0, 0, - g_gravity_norm);
-  V3 ref_gravity = g_kf_align_gravity ?  gravity : V3(0, 0, - g_gravity_norm);
+  V3 ref_gravity = g_kf_align_gravity ? gravity : V3(0, 0, - g_gravity_norm);
   M3 init_rot = Quat::FromTwoVectors(gravity, ref_gravity).toRotationMatrix();
   V3 n = init_rot.col(0);
   double yaw = atan2(n(1), n(0));
@@ -334,11 +335,17 @@ void SuperLIO::saveMap(){
   if(!point_map_->empty()){
     std::string map_name = g_save_map_dir + "/" + g_map_name;
     LOG(INFO) << YELLOW << " ---> Save map to: " << map_name << RESET;
-    pcl::VoxelGrid<PointType> voxel_fliter;
     PointCloudType latst_map;
-    voxel_fliter.setInputCloud(point_map_);
-    voxel_fliter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
-    voxel_fliter.filter(latst_map);
+    if(g_if_filter){
+      LOG(INFO) << YELLOW << " ---> Downsampling map before save..." << RESET;
+      pcl::VoxelGrid<PointType> voxel_fliter;
+      voxel_fliter.setInputCloud(point_map_);
+      voxel_fliter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
+      voxel_fliter.filter(latst_map);
+    }else{
+      LOG(INFO) << YELLOW << " ---> Not downsampling map before save..." << RESET;
+      latst_map = *point_map_;
+    }
     if(latst_map.size() > 0){
       latst_map.width = latst_map.size();
       latst_map.height = 1;
@@ -406,7 +413,8 @@ void SuperLIO::Propagation_Undistort(){
       }
       auto match_iter_n = std::next(match_iter);
       double dt = match_iter_n->time - match_iter->time;
-      double s = (query_time - match_iter->time) / dt;
+      double tau = query_time - match_iter->time;
+      double s   = tau / dt;
       R_h = match_iter->R;
       R_t = match_iter_n->R;
       p_h = match_iter->p;
@@ -414,7 +422,8 @@ void SuperLIO::Propagation_Undistort(){
       acc_t = match_iter_n->a;
       w_t = match_iter_n->w;
       M3 R_i = Quat(R_h).slerp(s, Quat(R_t)).toRotationMatrix();
-      V3 t_ei(p_h + v_h * dt + 0.5 * acc_t * dt * dt - T_end_t);
+      V3 p_i = p_h + v_h * tau + 0.5 * acc_t * tau * tau;
+      V3 t_ei = p_i - T_end_t;
       V3 raw(pt.x, pt.y, pt.z);
       V3 eigen_point = R_inv * (R_i * (TLI_R * raw + TLI_t) + t_ei);
       pt_full.x = eigen_point[0];
