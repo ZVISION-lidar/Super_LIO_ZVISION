@@ -2,7 +2,7 @@
 ## Overview
 
 <p align="center">
-  <img src="super_lio_zvision_nz5_mapping_demo.gif" width="95%">
+  <img src="docs/super_lio_zvision_nz5_mapping_demo.gif" width="95%">
 </p>
 
 **Key Features:  Efficient · Robust · Cross-Platform Compatible · Supports Both ROS1/ROS2 Versions**
