@@ -23,8 +23,8 @@
     lio.sensor.imu_nba: 0.001             #IMU偏置参数
     lio.sensor.imu_nbg: 0.001             #IMU偏置参数
 
-   # lio.extrinsic.lidar_imu: [-0.0026, -0.05527, 0.0193,   #NZ1 外参
-    lio.extrinsic.lidar_imu: [-0.0026, -0.06545, 0.0161,     #NZ3/5/MT 外参
+   # lio.extrinsic.lidar_imu: [-0.0026, -0.05527, -0.0193,   #NZ1 外参
+    lio.extrinsic.lidar_imu: [-0.0026, -0.06545, -0.0161,     #NZ3/5/MT 外参
                               1.0, 0.0, 0.0,
                               0.0, 1.0, 0.0,
                               0.0, 0.0, 1.0]           
