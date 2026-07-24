@@ -3,6 +3,10 @@
 
 Super_LIO_ZVISION  Relocalization Version with Prior Map 
 
+<p align="center">
+  <img src="docs/super_lio_zvision5_mapping_demo.gif" width="95%">
+</p>
+
 
 ## 1. Requirements
 
