@@ -2,7 +2,7 @@
 ## Overview
 
 <p align="center">
-  <img src="docs/system_overview.png" width="95%">
+  <img src="super_lio_zvision_nz5_mapping_demo.gif" width="95%">
 </p>
 
 **Key Features:  Efficient · Robust · Cross-Platform Compatible · Supports Both ROS1/ROS2 Versions**
@@ -36,17 +36,4 @@ colcon build
 source install/setup.bash
 ros2 launch super_lio zvision.py
 
-```
-
-#### 🔁 Relocalization Mode
-Super-LIO supports relocalization using a pre-built map, allowing the system to resume localization from a saved map without restarting the mapping process.
-This mode is useful for long-term deployment, repeated missions, or recovery after tracking loss.
-
-Before running relocalization, please make sure that:
-- A map has been previously saved to disk.
-
-```bash
-cd PATH_2_Super-LIO
-source install/setup.bash
-ros2 launch super_lio relocation.py
 ```
