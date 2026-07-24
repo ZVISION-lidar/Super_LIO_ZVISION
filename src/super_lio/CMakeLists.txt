@@ -122,5 +122,18 @@ install(DIRECTORY rviz/
   DESTINATION share/${PROJECT_NAME}/rviz
 )
 
+install(PROGRAMS
+  localization/global_localization.py
+  localization/transform_fusion.py
+  localization/map_publisher.py
+  localization/publish_initial_pose.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY config launch rviz
+  DESTINATION share/${PROJECT_NAME}
+)
+
+
 ament_package()
 
