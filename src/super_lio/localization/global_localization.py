@@ -271,7 +271,7 @@ def get_param(name, default):
 
 if __name__ == "__main__":
     rclpy.init()
-    node = Node("fast_lio_zvision_global_localization")
+    node = Node("super_lio")
     node.get_logger().info("Localization Node Inited...")
 
     MAP_VOXEL_SIZE = get_param("localization.map_voxel_size", 0.4)
