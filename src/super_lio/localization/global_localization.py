@@ -22,6 +22,10 @@ initialized = False
 T_map_to_odom = np.eye(4)
 cur_odom = None
 cur_scan = None
+latest_initial_pose = None
+first_scan_received = False
+_logged_waiting_scan = False
+_logged_waiting_pose = False
 
 
 def pose_to_mat(pose_msg):
@@ -61,15 +65,17 @@ def voxel_down_sample(pcd, voxel_size):
 
 
 def registration_at_scale(pc_scan, pc_map, initial, scale):
+    scan_down = voxel_down_sample(pc_scan, SCAN_VOXEL_SIZE * scale)
+    map_down = voxel_down_sample(pc_map, MAP_VOXEL_SIZE * scale)
     result_icp = o3d.pipelines.registration.registration_icp(
-        voxel_down_sample(pc_scan, SCAN_VOXEL_SIZE * scale),
-        voxel_down_sample(pc_map, MAP_VOXEL_SIZE * scale),
+        scan_down,
+        map_down,
         1.0 * scale,
         initial,
         o3d.pipelines.registration.TransformationEstimationPointToPoint(),
         o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=20),
     )
-    return result_icp.transformation, result_icp.fitness
+    return result_icp.transformation, result_icp.fitness, len(scan_down.points)
 
 
 def inverse_se3(trans):
@@ -133,12 +139,15 @@ def global_localization(pose_estimation):
 
     tic = time.time()
     global_map_in_FOV = crop_global_map_in_FOV(global_map, pose_estimation, cur_odom)
-    transformation, _ = registration_at_scale(scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
-    transformation, fitness = registration_at_scale(
+    transformation, _, _ = registration_at_scale(
+        scan_tobe_mapped, global_map_in_FOV, initial=pose_estimation, scale=5)
+    transformation, fitness, scan_points_fine = registration_at_scale(
         scan_tobe_mapped, global_map_in_FOV, initial=transformation, scale=1)
     node.get_logger().info("Time: {}".format(time.time() - tic))
+    node.get_logger().info(
+        "Fine ICP: scan points={}, fitness={:.6f}".format(scan_points_fine, fitness))
 
-    if fitness > LOCALIZATION_TH:
+    if scan_points_fine >= MIN_SCAN_POINTS_FINE and fitness > LOCALIZATION_TH:
         T_map_to_odom = transformation
         map_to_odom = Odometry()
         xyz = T_map_to_odom[:3, 3]
@@ -152,7 +161,13 @@ def global_localization(pose_estimation):
 
     node.get_logger().warn("Not match!!!!")
     node.get_logger().warn("{}".format(transformation))
-    node.get_logger().warn("fitness score:{}".format(fitness))
+    node.get_logger().warn(
+        "ICP rejected: scan points={} (min {}), fitness={:.6f} (must be > {:.6f})".format(
+            scan_points_fine,
+            MIN_SCAN_POINTS_FINE,
+            fitness,
+            LOCALIZATION_TH,
+        ))
     return False
 
 
@@ -170,7 +185,7 @@ def cb_save_cur_odom(odom_msg):
 
 
 def cb_save_cur_scan(pc_msg):
-    global cur_scan
+    global cur_scan, first_scan_received
     pc_msg.header.frame_id = ODOM_FRAME
     if cur_odom is not None:
         pc_msg.header.stamp = cur_odom.header.stamp
@@ -178,6 +193,27 @@ def cb_save_cur_scan(pc_msg):
     pc = msg_to_array(pc_msg)
     cur_scan = o3d.geometry.PointCloud()
     cur_scan.points = o3d.utility.Vector3dVector(pc[:, :3])
+    if not first_scan_received:
+        first_scan_received = True
+
+
+_last_pose_log_time = 0.0
+
+def cb_save_initial_pose(msg):
+    global latest_initial_pose, _last_pose_log_time
+    latest_initial_pose = msg
+    now = time.time()
+    if now - _last_pose_log_time > 0.6:
+        pos = msg.pose.pose.position
+        ori = msg.pose.pose.orientation
+        rpy = Rotation.from_quat([ori.x, ori.y, ori.z, ori.w]).as_euler("xyz")
+        node.get_logger().info(
+            "Initial pose received: x={:.3f}, y={:.3f}, z={:.3f}, "
+            "roll={:.3f}, pitch={:.3f}, yaw={:.3f}".format(
+                pos.x, pos.y, pos.z, rpy[0], rpy[1], rpy[2]
+            )
+        )
+        _last_pose_log_time = now
 
 
 def thread_localization():
@@ -221,6 +257,7 @@ if __name__ == "__main__":
     SCAN_VOXEL_SIZE = get_param("localization.scan_voxel_size", 0.1)
     FREQ_LOCALIZATION = get_param("localization.frequency", 0.5)
     LOCALIZATION_TH = get_param("localization.fitness_threshold", 0.90)
+    MIN_SCAN_POINTS_FINE = get_param("localization.min_scan_points_fine", 2000)
     FOV = get_param("localization.fov", 6.244)
     FOV_FAR = get_param("localization.fov_far", 150.0)
 
@@ -247,14 +284,31 @@ if __name__ == "__main__":
     map_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
     initialize_global_map(wait_for_message(MAP_TOPIC, PointCloud2, map_qos))
 
+    node.create_subscription(
+        PoseWithCovarianceStamped,
+        INITIAL_POSE_TOPIC,
+        cb_save_initial_pose,
+        10
+    )
+
     while rclpy.ok() and not initialized:
-        node.get_logger().warn("Waiting for initial pose....")
-        pose_msg = wait_for_message(INITIAL_POSE_TOPIC, PoseWithCovarianceStamped)
-        initial_pose = pose_to_mat(pose_msg)
-        if cur_scan is not None:
-            initialized = global_localization(initial_pose)
-        else:
-            node.get_logger().warn("First scan not received!!!!!")
+        if not first_scan_received:
+            if not _logged_waiting_scan:
+                node.get_logger().warn("Waiting for first scan....")
+                _logged_waiting_scan = True
+            rclpy.spin_once(node, timeout_sec=0.5)
+            continue
+        if latest_initial_pose is None:
+            if not _logged_waiting_pose:
+                node.get_logger().warn("Waiting for initial pose....")
+                _logged_waiting_pose = True
+            rclpy.spin_once(node, timeout_sec=0.5)
+            continue
+        _logged_waiting_scan = False
+        _logged_waiting_pose = False
+        initial_pose = pose_to_mat(latest_initial_pose)
+        latest_initial_pose = None
+        initialized = global_localization(initial_pose)
 
     node.get_logger().info("Initialize successfully!!!!!!")
     threading.Thread(target=thread_localization, daemon=True).start()

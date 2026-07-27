@@ -9,6 +9,7 @@ localization:
     # Global localization frequency and ICP threshold
     frequency: 0.5
     fitness_threshold: 0.95
+    min_scan_points_fine: 500
 
     # LiDAR FOV parameters (adjust for different LiDAR)
     # > pi = panoramic lidar

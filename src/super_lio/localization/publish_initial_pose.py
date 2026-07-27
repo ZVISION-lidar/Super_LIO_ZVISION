@@ -14,9 +14,9 @@ def main():
     parser.add_argument("x", type=float)
     parser.add_argument("y", type=float)
     parser.add_argument("z", type=float)
-    parser.add_argument("yaw", type=float)
-    parser.add_argument("pitch", type=float)
     parser.add_argument("roll", type=float)
+    parser.add_argument("pitch", type=float)
+    parser.add_argument("yaw", type=float)
     parser.add_argument("--frame-id", default="map")
     args = parser.parse_args()
 
@@ -33,7 +33,7 @@ def main():
     initial_pose.header.stamp = node.get_clock().now().to_msg()
     initial_pose.header.frame_id = args.frame_id
     node.get_logger().info("Initial Pose: {} {} {} {} {} {}".format(
-        args.x, args.y, args.z, args.yaw, args.pitch, args.roll))
+        args.x, args.y, args.z, args.roll, args.pitch, args.yaw))
     for _ in range(5):
         pub_pose.publish(initial_pose)
         rclpy.spin_once(node, timeout_sec=0.1)
