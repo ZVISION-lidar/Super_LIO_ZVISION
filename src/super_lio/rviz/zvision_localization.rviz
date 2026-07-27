@@ -4,7 +4,6 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /current1
         - /map1/Autocompute Value Bounds1
         - /Odometry1/Shape1
         - /Odometry2/Shape1
@@ -150,7 +149,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /lio/path
+        Value: /path_in_map
       Value: true
     - Angle Tolerance: 0.10000000149011612
       Class: rviz_default_plugins/Odometry
@@ -273,16 +272,16 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 95.87525177001953
+      Distance: 87.88417053222656
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -5.382619380950928
-        Y: 16.426597595214844
-        Z: -9.513429641723633
+        X: -8.146295547485352
+        Y: 18.97437286376953
+        Z: -9.510586738586426
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -291,7 +290,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.824081897735596
+      Yaw: 4.839081764221191
     Saved: ~
 Window Geometry:
   Displays:

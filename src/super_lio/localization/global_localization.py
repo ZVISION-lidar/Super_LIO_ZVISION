@@ -19,13 +19,14 @@ from scipy.spatial.transform import Rotation
 
 global_map = None
 initialized = False
-T_map_to_odom = np.eye(4)
+T_map_to_odom = np.eye(4, dtype=np.float64)
 cur_odom = None
 cur_scan = None
 latest_initial_pose = None
 first_scan_received = False
 _logged_waiting_scan = False
 _logged_waiting_pose = False
+_T_map_to_odom_valid = False
 
 
 def pose_to_mat(pose_msg):
@@ -132,8 +133,20 @@ def crop_global_map_in_FOV(global_map, pose_estimation, cur_odom):
     return global_map_in_FOV
 
 
+def _smooth_transform(current, new, alpha):
+    result = np.eye(4, dtype=np.float64)
+    result[:3, 3] = current[:3, 3].copy() * alpha + new[:3, 3].copy() * (1 - alpha)
+    current_rot = current[:3, :3].copy()
+    new_rot = new[:3, :3].copy()
+    current_axangle = Rotation.from_matrix(current_rot).as_rotvec()
+    new_axangle = Rotation.from_matrix(new_rot).as_rotvec()
+    smoothed_axangle = current_axangle * alpha + new_axangle * (1 - alpha)
+    result[:3, :3] = Rotation.from_rotvec(smoothed_axangle).as_matrix()
+    return result
+
+
 def global_localization(pose_estimation):
-    global global_map, cur_scan, cur_odom, T_map_to_odom
+    global global_map, cur_scan, cur_odom, T_map_to_odom, _T_map_to_odom_valid
     node.get_logger().info("Global localization by scan-to-map matching......")
     scan_tobe_mapped = copy.copy(cur_scan)
 
@@ -148,7 +161,13 @@ def global_localization(pose_estimation):
         "Fine ICP: scan points={}, fitness={:.6f}".format(scan_points_fine, fitness))
 
     if scan_points_fine >= MIN_SCAN_POINTS_FINE and fitness > LOCALIZATION_TH:
-        T_map_to_odom = transformation
+        if not _T_map_to_odom_valid:
+            T_map_to_odom = transformation
+            _T_map_to_odom_valid = True
+        elif TRANSFORM_SMOOTHING:
+            T_map_to_odom = _smooth_transform(T_map_to_odom, transformation, TRANSFORM_SMOOTHING_ALPHA)
+        else:
+            T_map_to_odom = transformation
         map_to_odom = Odometry()
         xyz = T_map_to_odom[:3, 3]
         quat = Rotation.from_matrix(np.array(T_map_to_odom[:3, :3], dtype=np.float64, copy=True)).as_quat()
@@ -221,7 +240,9 @@ def thread_localization():
     while rclpy.ok():
         time.sleep(1.0 / FREQ_LOCALIZATION)
         if cur_odom is not None and cur_scan is not None:
+            tic = time.time()
             global_localization(T_map_to_odom)
+            node.get_logger().info("Localization fusion time: {:.3f}s".format(time.time() - tic))
 
 
 class Waiter:
@@ -258,6 +279,8 @@ if __name__ == "__main__":
     FREQ_LOCALIZATION = get_param("localization.frequency", 0.5)
     LOCALIZATION_TH = get_param("localization.fitness_threshold", 0.90)
     MIN_SCAN_POINTS_FINE = get_param("localization.min_scan_points_fine", 2000)
+    TRANSFORM_SMOOTHING = get_param("localization.transform_smoothing", True)
+    TRANSFORM_SMOOTHING_ALPHA = get_param("localization.transform_smoothing_alpha", 0.7)
     FOV = get_param("localization.fov", 6.244)
     FOV_FAR = get_param("localization.fov_far", 150.0)
 

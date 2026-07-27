@@ -53,17 +53,17 @@ source install/setup.bash
 ros2 launch super_lio localization_zvision.launch.py map:=/path/to/yourself.pcd
 ```
 
-### 3.2 ros2 bag play a ros2bag data or run zvision—sdk
-
-```bash
-ros2 bag play /path/to/bag 
-```
-
-### 3.3 ros2 launch publish_initial_pose node  to publish an initial pose  (yaw pitch roll : /rad)
+### 3.2 ros2 launch publish_initial_pose node  to publish an initial pose  (roll pitch yaw : /rad)
 
 ```bash
 source install/setup.bash
-ros2 run fast_lio_zvision_localization publish_initial_pose.py x y z yaw pitch roll
+ros2 run fast_lio_zvision_localization publish_initial_pose.py x y z roll pitch yaw
+```
+
+### 3.3 ros2 bag play a ros2bag data or run zvision—sdk
+
+```bash
+ros2 bag play /path/to/bag 
 ```
 
 
@@ -84,6 +84,7 @@ Main topics:
 /lio/odom            Super-LIO odomrtry in "world" frame  
 /localization        global localization odomrtry in "map" frame 
 /cur_scan_in_map     current scan visualization in "map" frame
+/path_in_map         path trajectory of /localization
 ```
 
 ## 5. Key Parameters
@@ -91,13 +92,12 @@ Main topics:
 Relocalization parameters are in `config/zvision_localization.yaml`：
 
 ```text
-localization.map_voxel_size
-localization.scan_voxel_size
-localization.frequency
-localization.fitness_threshold
-localization.fov
-localization.fov_far
-transform_fusion.publish_frequency
+min_scan_points_fine                    #default 500
+transform_smoothing_alpha               #default 0.7
+localization.map_voxel_size             #default 0.4
+localization.scan_voxel_size            #default 0.1
+localization.fitness_threshold          #default 0.95
+transform_fusion.publish_frequency      #default 0.5
 ```
 
 

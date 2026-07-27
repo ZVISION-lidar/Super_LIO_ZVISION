@@ -30,6 +30,9 @@ localization:
     odom_frame: "world"
     body_frame: "imu"
 
+    transform_smoothing: true
+    transform_smoothing_alpha: 0.7
+
 transform_fusion:
     # TF publishing frequency
     publish_frequency: 50.0
@@ -38,6 +41,7 @@ transform_fusion:
     odometry_topic: "/lio/odom"
     map_to_odom_topic: "/map_to_odom"
     localization_topic: "/localization"
+    path_in_map_topic: /path_in_map
 
     # Frame names (adjust to match your SLAM system)
     map_frame: "map"
