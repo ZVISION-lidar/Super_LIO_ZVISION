@@ -57,7 +57,7 @@ ros2 launch super_lio localization_zvision.launch.py map:=/path/to/yourself.pcd
 
 ```bash
 source install/setup.bash
-ros2 run fast_lio_zvision_localization publish_initial_pose.py x y z roll pitch yaw
+ros2 run super_lio publish_initial_pose.py x y z roll pitch yaw
 ```
 
 ### 3.3 ros2 bag play a ros2bag data or run zvision—sdk
