@@ -526,35 +526,82 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr ms
     lidar_data.end_time = lidar_data.start_time + offset_time;
     break;
   }
+  // case LID_TYPE::ZVISION:
+  // {
+  //   // ZVISION point timestamp field is in seconds; use first valid point timestamp as reference.
+  //   pcl::PointCloud<zvision_ros::Point> pl_orig;
+  //   pcl::moveFromROSMsg(*msg, pl_orig);
+  //   if (pl_orig.empty()) return;
+  //   lidar_data.pc->reserve(pl_orig.size() / g_filter_rate + 1);
+
+  //   double min_offset = std::numeric_limits<double>::max();
+  //   double max_offset = std::numeric_limits<double>::lowest();
+
+  //   for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
+  //     auto& pt = pl_orig.points[i];
+  //     if (!validPoint(pt.x, pt.y, pt.z)) continue;
+  //     min_offset = std::min(min_offset, pt.timestamp);
+  //     max_offset = std::max(max_offset, pt.timestamp);
+  //   }
+
+  //   lidar_data.start_time = min_offset;
+  //   lidar_data.end_time = max_offset;
+
+  //   for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
+  //     auto& pt = pl_orig.points[i];
+  //     if (!validPoint(pt.x, pt.y, pt.z)) continue;
+  //     double offset_time = pt.timestamp - lidar_data.start_time;
+  //     lidar_data.pc->emplace_back(pt.x, pt.y, pt.z, pt.intensity, offset_time);
+  //   }
+  //   break;
+  // }
   case LID_TYPE::ZVISION:
   {
-    // ZVISION point timestamp field is in seconds; use first valid point timestamp as reference.
     pcl::PointCloud<zvision_ros::Point> pl_orig;
     pcl::moveFromROSMsg(*msg, pl_orig);
     if (pl_orig.empty()) return;
     lidar_data.pc->reserve(pl_orig.size() / g_filter_rate + 1);
 
+    // ---- 第一遍：全量点算 min/max，不加 blind / maxrange / filter_rate ----
     double min_offset = std::numeric_limits<double>::max();
     double max_offset = std::numeric_limits<double>::lowest();
 
-    for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
-      auto& pt = pl_orig.points[i];
-      if (!validPoint(pt.x, pt.y, pt.z)) continue;
+    for (std::size_t i = 0; i < pl_orig.size(); ++i) {
+      const auto& pt = pl_orig.points[i];
+      if (!std::isfinite(pt.timestamp)) continue;
       min_offset = std::min(min_offset, pt.timestamp);
       max_offset = std::max(max_offset, pt.timestamp);
     }
 
-    lidar_data.start_time = min_offset;
-    lidar_data.end_time = max_offset;
+    if (min_offset > max_offset) {
+      RCLCPP_WARN(rclcpp::get_logger("preprocess"),
+                  "ZVISION: no valid timestamp in frame");
+      return;
+    }
 
+    lidar_data.start_time = min_offset;
+    lidar_data.end_time   = max_offset;
+
+    // ---- 第二遍：按 filter_rate 采样 + validPoint + blind + maxrange ----
     for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
       auto& pt = pl_orig.points[i];
+
       if (!validPoint(pt.x, pt.y, pt.z)) continue;
-      double offset_time = pt.timestamp - lidar_data.start_time;
+      if (!std::isfinite(pt.timestamp)) continue;
+
+      // 距离平方，避免开根号
+      const double dist_sq = pt.x * pt.x + pt.y * pt.y + pt.z * pt.z;
+
+      // blind < dist < maxrange
+      if (dist_sq <= g_blind2) continue;       // 盲区内，丢弃
+      if (dist_sq >= g_maxrange2) continue;    // 超出最远距离，丢弃
+
+      const double offset_time = pt.timestamp - lidar_data.start_time;
       lidar_data.pc->emplace_back(pt.x, pt.y, pt.z, pt.intensity, offset_time);
     }
     break;
   }
+
   default:
     return;
   }
