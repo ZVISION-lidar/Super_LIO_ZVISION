@@ -13,11 +13,11 @@ Super-LIO is a robust and efficient LiDAR–Inertial Odometry (LIO) system desig
 
 ## Quickly Run with Zvision_lidar
 
-**For ROS1 Users**: Please switch to the **ros1** branch and follow the instructions at [ros1 branch](https://github.com/ZVISION-lidar/Super_LIO_ZVISION/tree/ros1)
+**For ROS2 Users**: Please switch to the **main** branch and follow the instructions at [ros1 branch](https://github.com/ZVISION-lidar/Super_LIO_ZVISION/)
 
 ### Requirements
 
-Ubuntu 24(22).04 · C++20 · ROS Jazzy(Humble) · Eigen · PCL 
+Ubuntu 20(18).04 · C++20 · ROS noetic(melodic) · Eigen · PCL 
 
 ### Dependencies
 
@@ -30,10 +30,10 @@ sudo apt install libgoogle-glog-dev libtbb-dev
 ### Build & Run
 ```bash
 git clone https://github.com/ZVISION-lidar/Super_LIO_ZVISION.git
-cd Super-LIO
-colcon build
+cd Super_LIO_ZVISION
+catkin_make
 
 source install/setup.bash
-ros2 launch super_lio zvision.py
+roslaunch super_lio zvision_nz1.launch
 
 ```
