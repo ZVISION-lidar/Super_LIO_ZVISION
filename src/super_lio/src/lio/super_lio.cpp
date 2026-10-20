@@ -76,9 +76,11 @@ void SuperLIO::init(){
     point_map_.reset(new PointCloudType());
   }
   
-  points_world_v3_.reserve(50000);
-  abcd_vec_.resize(50000);
-  effect_knn_idxs_.resize(50000);
+  points_world_v3_.reserve(21000);
+  effect_mask_.resize(20000, false);
+  effect_knn_mask_.resize(20000, false);
+  abcd_vec_.resize(20000);
+  effect_knn_idxs_.resize(20000);
   voxel_grid_fliter_.setLeafSize(g_voxel_fliter_size);
 
   state_fn_ = &SuperLIO::stateWaitKFInit;
@@ -108,7 +110,6 @@ void SuperLIO::process(){
   if(!data_wrapper_->sync_measure(measures_)){
     return;
   }
-  
   (this->*state_fn_)();
 }
 
@@ -131,7 +132,7 @@ bool SuperLIO::kf_init(){
 
   V3 gravity = - mean_acce * g_gravity_norm / mean_acce.norm();
   // V3 ref_gravity(0, 0, - g_gravity_norm);
-  V3 ref_gravity = g_kf_align_gravity ? gravity : V3(0, 0, - g_gravity_norm);
+  V3 ref_gravity= g_kf_align_gravity ? gravity : V3(0, 0, - g_gravity_norm);
   M3 init_rot = Quat::FromTwoVectors(gravity, ref_gravity).toRotationMatrix();
   V3 n = init_rot.col(0);
   double yaw = atan2(n(1), n(0));
@@ -184,7 +185,6 @@ bool SuperLIO::map_init(){
   ivox_->insert(points_world_v3_);
   kf_->SetLastObsTime(measures_.lidar.end_time);
 
-  // 20 Hz for 1.0 seconds. Integral coverage area > 70%
   if(frame_num_ > 3){
     g_flg_map_init = false;
     return true;
@@ -196,10 +196,10 @@ bool SuperLIO::map_init(){
 void SuperLIO::stateProcess(){
   frame_num_++;
   if(g_time_eva){
-    time_record_.Evaluate([this](){Propagation_Undistort();}, "[Undistort]");
-    time_record_.Evaluate([this]() { DownSample(); }, "[DownSample]");
-    time_record_.Evaluate([this]() { Observe(); }, "[Observe]");
-    time_record_.Evaluate([this]() { UpdateMap(); }, "[UpdateMap]");
+    time_record_.Evaluate([this](){Propagation_Undistort();}, "Undistort");
+    time_record_.Evaluate([this]() { DownSample(); }, "DownSample");
+    time_record_.Evaluate([this]() { Observe(); }, "Observe");
+    time_record_.Evaluate([this]() { UpdateMap(); }, "UpdateMap");
   }else{
     Propagation_Undistort();
     DownSample();
@@ -327,7 +327,6 @@ void SuperLIO::saveMap(){
     LOG(INFO) << GREEN << " ---> Save last cace success. " << RESET;
     LOG(INFO) << YELLOW << " ---> Process cace map ... " << RESET;
     ProcessCaceMap();
-    LOG(INFO) << GREEN << " ---> Process cace map success. " << RESET;
     return;
   }
 
@@ -335,17 +334,11 @@ void SuperLIO::saveMap(){
   if(!point_map_->empty()){
     std::string map_name = g_save_map_dir + "/" + g_map_name;
     LOG(INFO) << YELLOW << " ---> Save map to: " << map_name << RESET;
+    pcl::VoxelGrid<PointType> voxel_fliter;
     PointCloudType latst_map;
-    if(g_if_filter){
-      LOG(INFO) << YELLOW << " ---> Downsampling map before save..." << RESET;
-      pcl::VoxelGrid<PointType> voxel_fliter;
-      voxel_fliter.setInputCloud(point_map_);
-      voxel_fliter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
-      voxel_fliter.filter(latst_map);
-    }else{
-      LOG(INFO) << YELLOW << " ---> Not downsampling map before save..." << RESET;
-      latst_map = *point_map_;
-    }
+    voxel_fliter.setInputCloud(point_map_);
+    voxel_fliter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
+    voxel_fliter.filter(latst_map);
     if(latst_map.size() > 0){
       latst_map.width = latst_map.size();
       latst_map.height = 1;
@@ -355,14 +348,6 @@ void SuperLIO::saveMap(){
     LOG(INFO) << GREEN << " ---> Save map success. File: " << map_name << RESET;
     LOG(INFO) << GREEN << " ---> Map size: " << latst_map.size() << RESET;
   }
-}
-
-
-inline double get_cpu_time_seconds() {
-  struct rusage usage;
-  getrusage(RUSAGE_SELF, &usage);
-  return usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1e6 +
-         usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1e6;
 }
 
 
@@ -413,8 +398,7 @@ void SuperLIO::Propagation_Undistort(){
       }
       auto match_iter_n = std::next(match_iter);
       double dt = match_iter_n->time - match_iter->time;
-      double tau = query_time - match_iter->time;
-      double s   = tau / dt;
+      double s = (query_time - match_iter->time) / dt;
       R_h = match_iter->R;
       R_t = match_iter_n->R;
       p_h = match_iter->p;
@@ -422,8 +406,7 @@ void SuperLIO::Propagation_Undistort(){
       acc_t = match_iter_n->a;
       w_t = match_iter_n->w;
       M3 R_i = Quat(R_h).slerp(s, Quat(R_t)).toRotationMatrix();
-      V3 p_i = p_h + v_h * tau + 0.5 * acc_t * tau * tau;
-      V3 t_ei = p_i - T_end_t;
+      V3 t_ei(p_h + v_h * dt + 0.5 * acc_t * dt * dt - T_end_t);
       V3 raw(pt.x, pt.y, pt.z);
       V3 eigen_point = R_inv * (R_i * (TLI_R * raw + TLI_t) + t_ei);
       pt_full.x = eigen_point[0];
@@ -453,6 +436,10 @@ void SuperLIO::Observe(){
   static std::vector<float> _lengths;
   points_body_v3_.resize(ptsize);
   _lengths.resize(ptsize);
+  effect_mask_.resize(ptsize, false);
+  effect_knn_mask_.resize(ptsize, false);
+  abcd_vec_.resize(ptsize);
+  effect_knn_idxs_.resize(ptsize);
 
   effect_knn_num_ = ptsize;
   std::iota(effect_knn_idxs_.begin(), effect_knn_idxs_.begin() + ptsize, 0);

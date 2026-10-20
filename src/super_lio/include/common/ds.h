@@ -24,8 +24,7 @@ enum LID_TYPE
   ZVISION = 8
 };
 
-static constexpr int LID_TYPE_COUNT_VAL = 9;
-static const std::array<std::string, LID_TYPE_COUNT_VAL> LID_TYPE_NAMES = {
+static const std::array<std::string, 9> LID_TYPE_NAMES = {
   "INVALID",
   "LIVOX",
   "HESAI16",
@@ -36,6 +35,7 @@ static const std::array<std::string, LID_TYPE_COUNT_VAL> LID_TYPE_NAMES = {
   "OUSTER",
   "ZVISION"
 };
+
 
 struct SysState {
   SysState() = default;

@@ -1,4 +1,5 @@
 
+
 #ifndef ROSWRAPPER_HPP_
 #define ROSWRAPPER_HPP_
 
@@ -8,33 +9,30 @@
 #include <vector>
 #include <execution>
 
-#include <pcl/point_types.h>
-#include <pcl/point_cloud.h>
+ #include <pcl/point_types.h>
+ #include <pcl/point_cloud.h>
 
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp/callback_group.hpp>
-#include <tf2_ros/transform_broadcaster.h>
-#include <geometry_msgs/msg/transform_stamped.hpp>
-
-#include <sensor_msgs/msg/imu.hpp>
-#include <nav_msgs/msg/path.hpp>
-#include <nav_msgs/msg/odometry.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <visualization_msgs/msg/marker.hpp>
-#include <geometry_msgs/msg/point.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
-#include "livox_ros_driver2/msg/custom_msg.hpp"
+#include <ros/ros.h>
+#include <ros/callback_queue.h>
+#include <sensor_msgs/Imu.h>
+#include <nav_msgs/Path.h>
+#include <nav_msgs/Odometry.h>
+#include <ros/subscribe_options.h>
+#include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <visualization_msgs/Marker.h>
+#include <geometry_msgs/Point.h>
+#include <tf/transform_broadcaster.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <visualization_msgs/MarkerArray.h>
 
-/// msgs
-#include "super_lio/msg/cloud_pose.hpp"
-#include "super_lio/msg/cloud_pose2.hpp"
+#include "basic/alias.h"
+#include "basic/logs.h"
+#include "basic/Manifold.h"
+#include "livox_ros_driver/CustomMsg.h"
+#include "common/ds.h"
 
 /// ZVISION LiDAR point structure (NZ1 / EZ6 series)
-/// MUST match ROS PointCloud2 field offsets exactly:
-///   x:0(float32) y:4(float32) z:8(float32) intensity:16(uint8)
-///   ring:18(uint16) timestamp:24(float64)  point_step=32
 namespace zvision_ros
 {
 #pragma pack(push, 1)
@@ -58,29 +56,38 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(zvision_ros::Point,
 )
 
 #include "lio/params.h"
-#include "basic/alias.h"
-#include "basic/logs.h"
-#include "basic/Manifold.h"
-#include "common/ds.h"
-
 #include "lio/ESKF.h"
 #include "OctVoxMap/OctVoxMap.hpp"
 
 
+// #define SIM_GAZEBO
+
+
 namespace LI2Sup{
 
-void LoadParamFromRos(rclcpp::Node& node);
+void LoadParamFromRos(ros::NodeHandle& nh);
 
-void livox2pcl(const livox_ros_driver2::msg::CustomMsg::SharedPtr& msg, BASIC::CloudPtr& point_cloud);
+std::tuple<float, float, float> getColorFromVelocity(float velocity, float max_velocity);
 
-class ROSWrapper : public rclcpp::Node {
+void livox2pcl(const livox_ros_driver::CustomMsg::ConstPtr& msg, BASIC::CloudPtr& point_cloud);
+
+class ROSWrapper{
 public:
-  explicit ROSWrapper(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+  ROSWrapper();
   ~ROSWrapper(){};
   using Ptr = std::shared_ptr<ROSWrapper>;
   bool sync_measure(MeasureGroup&);
+  void spinOnce(){
+    self_queue_.callAvailable();
+  }
 
-  void setESKF(ESKF::Ptr& eskf) { eskf_ = eskf;}
+  void setESKF(ESKF::Ptr& eskf) {
+    eskf_ = eskf;
+  }
+
+  void setMap(OctVoxMap<BASIC::V3, BASIC::scalar>::Ptr& ivox) {
+    ivox_ = ivox;
+  }
 
   void clear(){
     lidar_buffer_.clear();
@@ -93,58 +100,49 @@ public:
   void pub_odom(const NavState&);
   void pub_cloud_world(const BASIC::CloudPtr& pc, double time);
   void pub_cloud2planner(const BASIC::CloudPtr& pc, double time);
-  void pub_cloud_world_pose(const BASIC::CloudPtr& pc, 
-                            const NavState& state);
   void pub_cloud_body_pose(const BASIC::CloudPtr& pc, 
                            const NavState& state);
+  void pub_cloud_world_pose(const BASIC::CloudPtr& pc, 
+                            const NavState& state);
   void pub_cloud_body_pose( const BASIC::VV3& pc_body,
-                            const NavState& state);  
+                            const NavState& state);
   void pub_processing_time(double time, double current_time, double mean_time, double std_time);
 
   void set_global_map(const BASIC::CloudPtr& global_map);
 
   void set_initial_data(BASIC::SE3& init_pose, bool& flg_get_init_guess, bool flg_finish_init = false);
 
-  rclcpp::CallbackGroup::SharedPtr getSensorCallbackGroup() {
-    return cb_sensor_;
-  }
 
 private:
-  void imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg);
-  void livoxHandler(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg);
-  void stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+  void imuHandler(const sensor_msgs::Imu::ConstPtr&);
+  void livoxHandler(const livox_ros_driver::CustomMsg::ConstPtr&);
+  void stdMsgHandler(const sensor_msgs::PointCloud2::ConstPtr&);
 
-  void setupParams();
-  void setupIO();
 
-private:
-  rclcpp::CallbackGroup::SharedPtr cb_sensor_;
-  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
-  rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_lidar_;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_std_;
-
+  ros::NodeHandle nh_;
+  ros::CallbackQueue self_queue_;
+  ros::Subscriber subLidar_;
+  ros::Subscriber subIMU_;
   std::deque<IMUData>   imu_buffer_;
   std::deque<LidarData> lidar_buffer_;
   bool lidar_pushed_ = false;
   double last_timestamp_imu_ = -1.0;
   double last_timestamp_lidar_ = -1.0;
 
-  ESKF::Ptr eskf_{nullptr};
+  ESKF::Ptr eskf_ = nullptr;
+  OctVoxMap<BASIC::V3, BASIC::scalar>::Ptr ivox_ = nullptr;
 
-  nav_msgs::msg::Path path_;
-  geometry_msgs::msg::PoseStamped msg2uav_;
-  sensor_msgs::msg::PointCloud2 global_map_msg_;
-  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  /// output
+  ros::Publisher pub_odom_;        // imu frame -> lidar frequency
+  ros::Publisher pub_path_;        // robo path
+  ros::Publisher pub_path_robot_;
 
+  nav_msgs::Path path_;
+  sensor_msgs::PointCloud2 msg_path_point_;
+  sensor_msgs::PointCloud2 global_map_msg_;
+  geometry_msgs::PoseStamped msg2uav_;
   BASIC::V3 last_path_point_ = BASIC::V3(0, 0, -100);
-
-/// output.
-private:
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;       /// lidar fre --> IMU frame
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_imu_odom_;   /// IMU fre   --> IMU frame
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_robo_odom_;  /// IMU fre   --> Robot frame
-  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_world_;
+  tf::TransformBroadcaster br_;
 };
 
 } // namespace END.
