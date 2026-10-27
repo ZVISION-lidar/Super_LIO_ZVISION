@@ -58,5 +58,9 @@ lio:
     dense:  false
     pub_step: 1
 
+    # Decimation factor of /lio/imu/odom and /lio/robo/odom.
+    # step is decimated. 1 = publish every IMU sample (200hz), 2 = every other one.(100hz)
+    imu_odom_pub_divider: 2 
+
   eva:
     timer: true

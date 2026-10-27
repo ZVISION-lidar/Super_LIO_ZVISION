@@ -81,6 +81,9 @@ namespace LI2Sup{
   extern bool g_visual_map;
   extern bool g_visual_dense;
   extern int  g_pub_step;
+  /// Decimation factor of the high-frequency IMU/robot odometry topics.
+  /// 1 = publish on every IMU sample, 2 = publish every other sample, ...
+  extern int g_imu_odom_pub_divider;
 
   /// for planner
   extern bool g_planner_enable;

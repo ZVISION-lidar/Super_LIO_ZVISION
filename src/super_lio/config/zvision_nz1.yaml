@@ -1,7 +1,7 @@
 lio:
   # Map settings
   map:
-    save_map: true
+    save_map: false
     if_filter: true
     save_map_dir: "map"
     map_name: "map.pcd"
@@ -10,8 +10,10 @@ lio:
 
   # ROS Topic input
   ros:
-    lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
-    imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
+    # lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
+    # imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
+    lidar_topic: "/zvlidar_points_xyzirt"
+    imu_topic: "/zvlidar_imu_msg"
 
   # Sensor Configuration
   sensor:
@@ -57,6 +59,10 @@ lio:
     map:    true
     dense:  false
     pub_step: 1
+
+    # Decimation factor of /lio/imu/odom and /lio/robo/odom.
+    # step is decimated. 1 = publish every IMU sample (200hz), 2 = every other one.(100hz)
+    imu_odom_pub_divider: 2 
 
   eva:
     timer: true

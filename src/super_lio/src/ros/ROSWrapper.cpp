@@ -95,6 +95,10 @@ void LoadParamFromRos(ros::NodeHandle& nh){
   nh.getParam("/lio/output/map",    g_visual_map);
   nh.getParam("/lio/output/dense",  g_visual_dense);
   nh.getParam("/lio/output/pub_step", g_pub_step);
+  nh.getParam("/lio/output/imu_odom_pub_divider", g_imu_odom_pub_divider);
+  if(g_imu_odom_pub_divider < 1) g_imu_odom_pub_divider = 1;
+  LOG(INFO) << GREEN << " ---> [Param] output/imu_odom_pub_divider: " << g_imu_odom_pub_divider
+            << " (1 = publish at the IMU rate)" << RESET;
 
   g_update_map = false;
   nh.getParam("/lio/relocation/update_map", g_update_map);
@@ -415,14 +419,6 @@ void ROSWrapper::imuHandler(const sensor_msgs::Imu::ConstPtr& msg){
                  msg->angular_velocity.y,
                  msg->angular_velocity.z);
 
-  // data.acc  = V3(-msg->linear_acceleration.x,
-  //                -msg->linear_acceleration.z,
-  //                -msg->linear_acceleration.y);
-  // data.gyr  = V3(-msg->angular_velocity.x,
-  //                -msg->angular_velocity.z,
-  //                -msg->angular_velocity.y);
-
-
   if (data.secs < last_timestamp_imu_) {
     LOG(WARNING) << "imu loop back, clear buffer";
     imu_buffer_.clear();
@@ -435,11 +431,16 @@ void ROSWrapper::imuHandler(const sensor_msgs::Imu::ConstPtr& msg){
   imu_buffer_.push_back(data);
   last_timestamp_imu_ = data.secs;
 
-  static ros::Publisher pub_imu_odom  = nh_.advertise<nav_msgs::Odometry>("/lio/imu/odom", 10);    /// imu frame -> imu freq
-  static ros::Publisher pub_robo_odom = nh_.advertise<nav_msgs::Odometry>("/lio/robo/odom", 10);   /// robot frame -> imu freq
+  static ros::Publisher pub_imu_odom  = nh_.advertise<nav_msgs::Odometry>("/lio/imu/odom", 50);    /// imu frame -> imu freq
+  static ros::Publisher pub_robo_odom = nh_.advertise<nav_msgs::Odometry>("/lio/robo/odom", 50);   /// robot frame -> imu freq
   
   DynamicState imu_state, robo_state;
   if(eskf_->Predict(data, imu_state, robo_state)){
+    static int pub_counter = 0;
+    const int pub_divider = g_imu_odom_pub_divider;
+    if(++pub_counter < pub_divider) return;
+    pub_counter = 0;
+
     nav_msgs::Odometry odom_imu, odom_robo;
 
     {
