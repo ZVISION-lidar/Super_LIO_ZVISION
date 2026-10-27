@@ -11,7 +11,7 @@
     lio.ros.imu_topic: "/zvlidar_imu_msg"          #IMU话题
 
     lio.sensor.lidar_type: 8              #雷达类型
-    lio.sensor.blind: 0.3                 #雷达盲区
+    lio.sensor.blind: 1.0                 #雷达盲区
     lio.sensor.maxrange: 150.0            #雷达最大距离
     lio.sensor.filter_rate: 1             #雷达滤波率
     lio.sensor.enable_downsample: false   #lio中是否降采样，false不降采样，true降采样
@@ -34,7 +34,7 @@
 
     lio.kf.kf_type: 0
     lio.kf.kf_max_iterations: 4
-    lio.kf.kf_align_gravity: true
+    lio.kf.kf_align_gravity: false
     lio.kf.kf_quit_eps: 0.001
 
     lio.output.robot: false
@@ -44,5 +44,9 @@
     lio.output.map: true
     lio.output.dense: false
     lio.output.pub_step: 1    # 每*帧发布一次
+
+    # /lio/imu/odom 与 /lio/robo/odom 的发布抽稀倍数
+    # 1 = 每条 IMU 都发（200Hz）；2 = 隔一条发一条（200Hz -> 约 100Hz）
+    lio.output.imu_odom_pub_divider: 2
 
     lio.eva.timer: true    #是否开启评估计时器，true开启，false关闭

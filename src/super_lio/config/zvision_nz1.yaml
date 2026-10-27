@@ -44,5 +44,8 @@
     lio.output.map: true
     lio.output.dense: false
     lio.output.pub_step: 1    # 每*帧发布一次
+    # /lio/imu/odom 与 /lio/robo/odom 的发布抽稀倍数
+    # 1 = 每条 IMU 都发（200Hz）；2 = 隔一条发一条（200Hz -> 约 100Hz）
+    lio.output.imu_odom_pub_divider: 2
 
     lio.eva.timer: true    #是否开启评估计时器，true开启，false关闭

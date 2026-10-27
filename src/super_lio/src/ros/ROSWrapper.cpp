@@ -173,6 +173,13 @@ void LoadParamFromRos(rclcpp::Node& node)
 
   node.declare_parameter<int>("lio.output.pub_step", 0);
   node.get_parameter("lio.output.pub_step", g_pub_step);
+  node.declare_parameter<int>("lio.output.imu_odom_pub_divider", 1);
+  node.get_parameter("lio.output.imu_odom_pub_divider", g_imu_odom_pub_divider);
+  if(g_imu_odom_pub_divider < 1) g_imu_odom_pub_divider = 1;
+
+  LOG(INFO) << GREEN << " ---> [Param] output/imu_odom_pub_divider: "
+            << g_imu_odom_pub_divider << " (1 = publish at the IMU rate)"
+            << RESET;
 
   // ================= relocation =================
   node.declare_parameter<bool>("lio.relocation.update_map", false);
@@ -327,10 +334,10 @@ void ROSWrapper::setupIO(){
       "/lio/odom", 100);
 
   pub_imu_odom_ = this->create_publisher<nav_msgs::msg::Odometry>(
-      "/lio/imu/odom", 10);
+      "/lio/imu/odom", 50);
 
   pub_robo_odom_ = this->create_publisher<nav_msgs::msg::Odometry>(
-      "/lio/robo/odom", 10);
+      "/lio/robo/odom", 50);
 
   pub_path_ = this->create_publisher<nav_msgs::msg::Path>(
       "/lio/path", 10);
@@ -346,12 +353,6 @@ void ROSWrapper::setupIO(){
 void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
   IMUData data;
   data.secs = stampToSec(msg->header.stamp);
-  // data.acc  = V3(-msg->linear_acceleration.x,
-  //                -msg->linear_acceleration.z,
-  //                -msg->linear_acceleration.y);
-  // data.gyr  = V3(-msg->angular_velocity.x,
-  //                -msg->angular_velocity.z,
-  //                -msg->angular_velocity.y);
   data.acc  = V3(msg->linear_acceleration.x,
                   msg->linear_acceleration.y,
                   msg->linear_acceleration.z);
@@ -373,6 +374,12 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
 
   DynamicState imu_state, robo_state;
   if(eskf_->Predict(data, imu_state, robo_state)){
+
+    static int pub_counter = 0;
+    const int pub_divider = g_imu_odom_pub_divider;
+    if(++pub_counter < pub_divider) return;
+    pub_counter = 0;
+
     nav_msgs::msg::Odometry odom_imu, odom_robo;
 
     {

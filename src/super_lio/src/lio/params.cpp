@@ -64,6 +64,7 @@ namespace LI2Sup{
   bool g_visual_map = true;
   bool g_visual_dense = false;
   int  g_pub_step;
+  int  g_imu_odom_pub_divider = 1;   // 1: publish at the IMU rate
 
   /// for planner
   bool g_planner_enable;
