@@ -13,7 +13,7 @@ Super-LIO is a robust and efficient LiDAR–Inertial Odometry (LIO) system desig
 
 ## Quickly Run with Zvision_lidar
 
-**For ROS2 Users**: Please switch to the **main** branch and follow the instructions at [ros1 branch](https://github.com/ZVISION-lidar/Super_LIO_ZVISION/)
+**For ROS2 Users**: Please switch to the **main** branch and follow the instructions at [ros2 branch](https://github.com/ZVISION-lidar/Super_LIO_ZVISION/)
 
 ### Requirements
 
