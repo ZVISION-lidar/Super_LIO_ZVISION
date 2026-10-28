@@ -29,7 +29,7 @@ sudo apt install libgoogle-glog-dev libtbb-dev
 
 ### Build & Run
 ```bash
-git clone https://github.com/ZVISION-lidar/Super_LIO_ZVISION.git
+git clone -b ROS1 https://github.com/ZVISION-lidar/Super_LIO_ZVISION.git
 cd Super_LIO_ZVISION
 catkin_make
 
