@@ -79,6 +79,26 @@ void LoadParamFromRos(rclcpp::Node& node)
   node.declare_parameter<double>("lio.sensor.imu_nbg", 0.0);
   node.get_parameter("lio.sensor.imu_nbg", g_imu_nbg);
 
+  // ================= IMU vibration suppression filter =================
+  node.declare_parameter<bool>("lio.sensor.imu_notch_enable", true);
+  node.get_parameter("lio.sensor.imu_notch_enable", g_imu_notch_enable);
+
+  node.declare_parameter<bool>("lio.sensor.imu_lp_enable", true);
+  node.get_parameter("lio.sensor.imu_lp_enable", g_imu_lp_enable);
+
+  node.declare_parameter<double>("lio.sensor.imu_filt_fs", 197.98);
+  node.get_parameter("lio.sensor.imu_filt_fs", g_imu_filt_fs);
+
+  node.declare_parameter<std::vector<double>>(
+      "lio.sensor.imu_notch_f0s", std::vector<double>({43.42, 19.61}));
+  node.get_parameter("lio.sensor.imu_notch_f0s", g_imu_notch_f0s);
+
+  node.declare_parameter<double>("lio.sensor.imu_notch_q", 8.0);
+  node.get_parameter("lio.sensor.imu_notch_q", g_imu_notch_q);
+
+  node.declare_parameter<double>("lio.sensor.imu_lp_fc", 15.0);
+  node.get_parameter("lio.sensor.imu_lp_fc", g_imu_lp_fc);
+
   // ================= extrinsic =================
   std::vector<double> extrinsic_lidar_imu;
   node.declare_parameter<std::vector<double>>(
@@ -284,6 +304,15 @@ ROSWrapper::ROSWrapper(const rclcpp::NodeOptions& options)
   LOG(INFO) << GREEN << " ---> Using Lidar type: "
             << lidarTypeToString(g_lidar_type) << RESET;
 
+  // IMU vibration suppression filter params
+  imu_notch_enable_ = g_imu_notch_enable;
+  imu_lp_enable_    = g_imu_lp_enable;
+  imu_filt_fs_      = g_imu_filt_fs;
+  imu_notch_f0s_    = g_imu_notch_f0s;
+  imu_notch_q_      = g_imu_notch_q;
+  imu_lp_fc_        = g_imu_lp_fc;
+  initFilters();
+
   msg2uav_.header.frame_id = "world";
   path_.header.frame_id = "world";
 
@@ -350,13 +379,79 @@ void ROSWrapper::setupIO(){
       std::make_shared<tf2_ros::TransformBroadcaster>(this);
 }
 
+// ============================================================
+// IMU 振动抑制滤波器初始化
+//   acc : Notch(多频点) -> BiquadLP(15Hz)
+//   gyr : Notch(多频点)
+//   Notch 精准消除旋翼振动主频, 通带几乎无相位延迟;
+//   低通兜底宽带噪声与谐波。
+// ============================================================
+void ROSWrapper::initFilters(){
+  const double fs = imu_filt_fs_;
+  for(int i = 0; i < 3; ++i){
+    notch_acc_[i].setFreqs(imu_notch_f0s_, fs, imu_notch_q_);
+    notch_gyr_[i].setFreqs(imu_notch_f0s_, fs, imu_notch_q_);
+    lp_acc_[i].setParams(imu_lp_fc_, fs);
+  }
+  imu_filt_initialized_ = true;
+
+  std::string f0s_str;
+  for (size_t i = 0; i < imu_notch_f0s_.size(); ++i) {
+    if (i) f0s_str += ", ";
+    f0s_str += std::to_string(imu_notch_f0s_[i]);
+  }
+
+  LOG(INFO) << GREEN << " ---> [ROSWrapper]: IMU filter. "
+            << "notch=" << (imu_notch_enable_ ? "on" : "off")
+            << " f0s=[" << f0s_str << "]Hz"
+            << " Q=" << imu_notch_q_
+            << " | lowpass=" << (imu_lp_enable_ ? "on" : "off")
+            << " fc=" << imu_lp_fc_ << "Hz"
+            << " | fs=" << fs << "Hz"
+            << RESET;
+}
+
+// ============================================================
+// 单帧 IMU 滤波
+//   acc : Notch -> LowPass   (两者可独立开关)
+//   gyr : Notch only         (低通会带来姿态滞后, 故不设)
+// ============================================================
+void ROSWrapper::filterIMU(const IMUData& in, IMUData& out){
+  out = in;
+
+  const bool use_notch = imu_notch_enable_;
+  const bool use_lp    = imu_lp_enable_;
+
+  if(!use_notch && !use_lp){
+    out.acc = in.acc;
+    out.gyr = in.gyr;
+    return;
+  }
+
+  for(int i = 0; i < 3; ++i){
+    double a = in.acc(i);
+    double g = in.gyr(i);
+
+    if(use_notch){
+      a = notch_acc_[i].update(a);
+      g = notch_gyr_[i].update(g);
+    }
+    if(use_lp){
+      a = lp_acc_[i].update(a);
+    }
+
+    out.acc(i) = a;
+    out.gyr(i) = g;
+  }
+}
+
 void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
   IMUData data;
   data.secs = stampToSec(msg->header.stamp);
   data.acc  = V3(msg->linear_acceleration.x,
                   msg->linear_acceleration.y,
                   msg->linear_acceleration.z);
-   data.gyr  = V3(msg->angular_velocity.x,
+  data.gyr  = V3(msg->angular_velocity.x,
                   msg->angular_velocity.y,
                   msg->angular_velocity.z);
 
@@ -369,11 +464,20 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
     return;
   }
 
-  imu_buffer_.push_back(data);
+  // 首次进入时初始化滤波器系数
+  if(!imu_filt_initialized_){
+    initFilters();
+  }
+
+  // 滤波: acc -> Notch(多频点) + LP, gyr -> Notch(多频点)
+  IMUData filtered_data;
+  filterIMU(data, filtered_data);
+
+  imu_buffer_.push_back(filtered_data);
   last_timestamp_imu_ = data.secs;
 
   DynamicState imu_state, robo_state;
-  if(eskf_->Predict(data, imu_state, robo_state)){
+  if(eskf_->Predict(filtered_data, imu_state, robo_state)){
 
     static int pub_counter = 0;
     const int pub_divider = g_imu_odom_pub_divider;

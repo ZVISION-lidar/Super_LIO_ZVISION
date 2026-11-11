@@ -38,6 +38,14 @@ namespace LI2Sup{
   double g_imu_nba;
   double g_imu_nbg;
 
+  /// IMU vibration suppression filter
+  bool   g_imu_notch_enable = false;
+  bool   g_imu_lp_enable   = true;
+  double g_imu_filt_fs     = 197.98;
+  std::vector<double> g_imu_notch_f0s = {43.42, 19.61};
+  double g_imu_notch_q     = 8.0;
+  double g_imu_lp_fc       = 15.0;
+
   SE3 g_lidar_imu;
   SE3 g_odom_robo;
   M3  g_lidar_robo_yaw;

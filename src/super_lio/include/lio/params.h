@@ -55,6 +55,14 @@ namespace LI2Sup{
   extern double g_imu_nba;
   extern double g_imu_nbg;
 
+  /// IMU vibration suppression filter
+  extern bool   g_imu_notch_enable;   ///< notch (rotor vibration) switch
+  extern bool   g_imu_lp_enable;      ///< low-pass (broadband noise) switch
+  extern double g_imu_filt_fs;        ///< IMU sample rate (Hz) used for coefficient design
+  extern std::vector<double> g_imu_notch_f0s;  ///< notch center frequencies (Hz), empty = off
+  extern double g_imu_notch_q;        ///< notch Q (bandwidth = f0/Q)
+  extern double g_imu_lp_fc;          ///< low-pass cutoff frequency (Hz)
+
   extern BASIC::SE3 g_lidar_imu;      // lidar in imu frame
   extern BASIC::SE3 g_odom_robo;      // lidar in robot frame
   extern BASIC::M3  g_lidar_robo_yaw; // lidar in robot frame rotation only yaw
