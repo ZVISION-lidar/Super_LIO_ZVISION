@@ -11,12 +11,12 @@
     lio.ros.imu_topic: "/zvlidar_imu_msg"          #IMU话题
 
     lio.sensor.lidar_type: 8              #雷达类型
-    lio.sensor.blind: 0.6                 #雷达盲区
+    lio.sensor.blind: 0.8                 #雷达盲区
     lio.sensor.maxrange: 100.0            #雷达最大距离
     lio.sensor.filter_rate: 1             #雷达滤波率
     lio.sensor.enable_downsample: false   #lio中是否降采样，false不降采样，true降采样
     lio.sensor.voxel_fliter_size: 0.5     #lio中降采样参数
-    lio.sensor.gravity_norm: 9.7946       #重力加速度
+    lio.sensor.gravity_norm: 9.81       #重力加速度
     lio.sensor.imu_type: 1                #IMU类型，默认6轴
     lio.sensor.imu_na: 0.1                #IMU噪声参数
     lio.sensor.imu_ng: 0.1                #IMU噪声参数
@@ -24,7 +24,6 @@
     lio.sensor.imu_nbg: 0.001             #IMU偏置参数
 
     # IMU 振动抑制滤波器
-    # acc 走 Notch -> LowPass ; gyr 只走 Notch (低通会拖慢姿态)。
     # imu_notch_enable: 陷波开关
     # imu_lp_enable   : 低通开关
     # imu_notch_f0s   : 陷波中心频率列表 (Hz)
@@ -46,7 +45,7 @@
 
     lio.kf.kf_type: 0
     lio.kf.kf_max_iterations: 4
-    lio.kf.kf_align_gravity: false
+    lio.kf.kf_align_gravity: true
     lio.kf.kf_quit_eps: 0.001
 
     lio.output.robot: false

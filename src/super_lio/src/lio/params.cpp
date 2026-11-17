@@ -40,7 +40,7 @@ namespace LI2Sup{
 
   /// IMU vibration suppression filter
   bool   g_imu_notch_enable = false;
-  bool   g_imu_lp_enable   = true;
+  bool   g_imu_lp_enable   = false;
   double g_imu_filt_fs     = 197.98;
   std::vector<double> g_imu_notch_f0s = {43.42, 19.61};
   double g_imu_notch_q     = 8.0;

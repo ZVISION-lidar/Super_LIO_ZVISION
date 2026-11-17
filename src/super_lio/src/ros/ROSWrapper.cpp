@@ -80,7 +80,7 @@ void LoadParamFromRos(rclcpp::Node& node)
   node.get_parameter("lio.sensor.imu_nbg", g_imu_nbg);
 
   // ================= IMU vibration suppression filter =================
-  node.declare_parameter<bool>("lio.sensor.imu_notch_enable", true);
+  node.declare_parameter<bool>("lio.sensor.imu_notch_enable", false);
   node.get_parameter("lio.sensor.imu_notch_enable", g_imu_notch_enable);
 
   node.declare_parameter<bool>("lio.sensor.imu_lp_enable", true);
@@ -476,8 +476,15 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
   imu_buffer_.push_back(filtered_data);
   last_timestamp_imu_ = data.secs;
 
+  // ============================================================
+  //  前向递推 (纯 IMU 推算)
+  //   内部维护独立的递推 IMU 缓冲, 在 EKF 锚点后逐条重积分,
+  //   积分步长恒为 ~5ms (与 FastLIVO2 的 prop_imu_once 行为一致).
+  //   旧实现锚点后不做重积分, 会用单条 acc 外推一大段 dt,
+  //   导致每个 LIO 帧 (10Hz) 向速度注入一个尖峰.
+  // ============================================================
   DynamicState imu_state, robo_state;
-  if(eskf_->Predict(filtered_data, imu_state, robo_state)){
+  if(eskf_->ForwardPredict(filtered_data, imu_state, robo_state)){
 
     static int pub_counter = 0;
     const int pub_divider = g_imu_odom_pub_divider;
@@ -637,35 +644,6 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr ms
     lidar_data.end_time = lidar_data.start_time + offset_time;
     break;
   }
-  // case LID_TYPE::ZVISION:
-  // {
-  //   // ZVISION point timestamp field is in seconds; use first valid point timestamp as reference.
-  //   pcl::PointCloud<zvision_ros::Point> pl_orig;
-  //   pcl::moveFromROSMsg(*msg, pl_orig);
-  //   if (pl_orig.empty()) return;
-  //   lidar_data.pc->reserve(pl_orig.size() / g_filter_rate + 1);
-
-  //   double min_offset = std::numeric_limits<double>::max();
-  //   double max_offset = std::numeric_limits<double>::lowest();
-
-  //   for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
-  //     auto& pt = pl_orig.points[i];
-  //     if (!validPoint(pt.x, pt.y, pt.z)) continue;
-  //     min_offset = std::min(min_offset, pt.timestamp);
-  //     max_offset = std::max(max_offset, pt.timestamp);
-  //   }
-
-  //   lidar_data.start_time = min_offset;
-  //   lidar_data.end_time = max_offset;
-
-  //   for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
-  //     auto& pt = pl_orig.points[i];
-  //     if (!validPoint(pt.x, pt.y, pt.z)) continue;
-  //     double offset_time = pt.timestamp - lidar_data.start_time;
-  //     lidar_data.pc->emplace_back(pt.x, pt.y, pt.z, pt.intensity, offset_time);
-  //   }
-  //   break;
-  // }
   case LID_TYPE::ZVISION:
   {
     pcl::PointCloud<zvision_ros::Point> pl_orig;

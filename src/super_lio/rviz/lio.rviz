@@ -32,7 +32,7 @@ Visualization Manager:
       Cell Size: 1
       Class: rviz_default_plugins/Grid
       Color: 160; 160; 164
-      Enabled: true
+      Enabled: false
       Line Style:
         Line Width: 0.029999999329447746
         Value: Lines
@@ -45,7 +45,7 @@ Visualization Manager:
       Plane: XY
       Plane Cell Count: 10
       Reference Frame: <Fixed Frame>
-      Value: true
+      Value: false
     - Class: rviz_default_plugins/Axes
       Enabled: true
       Length: 1
@@ -56,8 +56,8 @@ Visualization Manager:
     - Alpha: 0.10000000149011612
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 12.904032707214355
-        Min Value: -19.227825164794922
+        Max Value: 2.992943048477173
+        Min Value: -1.3448045253753662
         Value: true
       Axis: Z
       Channel Name: z
@@ -319,26 +319,26 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Class: rviz_default_plugins/ThirdPersonFollower
-      Distance: 62.536502838134766
+      Class: rviz_default_plugins/XYOrbit
+      Distance: 33.213687896728516
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.8274713754653931
-        Y: -21.746002197265625
-        Z: 6.124303126853192e-06
+        X: -0.023279905319213867
+        Y: -9.086076736450195
+        Z: 1.33514404296875e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.3647957444190979
+      Pitch: 0.6497968435287476
       Target Frame: <Fixed Frame>
-      Value: ThirdPersonFollower (rviz_default_plugins)
-      Yaw: 4.693567752838135
+      Value: XYOrbit (rviz_default_plugins)
+      Yaw: 4.723572254180908
     Saved: ~
 Window Geometry:
   Displays:

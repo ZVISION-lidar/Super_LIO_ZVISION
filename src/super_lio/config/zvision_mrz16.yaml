@@ -12,11 +12,11 @@
 
     lio.sensor.lidar_type: 8              #雷达类型
     lio.sensor.blind: 0.5                 #雷达盲区
-    lio.sensor.maxrange: 150.0            #雷达最大距离
+    lio.sensor.maxrange: 60.0            #雷达最大距离
     lio.sensor.filter_rate: 1             #雷达滤波率
     lio.sensor.enable_downsample: true   #lio中是否降采样，false不降采样，true降采样
-    lio.sensor.voxel_fliter_size: 0.5     #lio中降采样参数
-    lio.sensor.gravity_norm: 9.8046       #重力加速度
+    lio.sensor.voxel_fliter_size: 0.2     #lio中降采样参数
+    lio.sensor.gravity_norm: 9.81       #重力加速度
     lio.sensor.imu_type: 1                #IMU类型，默认6轴
     lio.sensor.imu_na: 0.1                #IMU噪声参数
     lio.sensor.imu_ng: 0.1                #IMU噪声参数

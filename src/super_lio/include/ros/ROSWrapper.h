@@ -272,8 +272,8 @@ private:
   bool imu_filt_initialized_ = false;
 
   /// 滤波器参数（可由配置文件覆盖）
-  bool imu_notch_enable_ = true;  ///< 陷波开关
-  bool imu_lp_enable_ = true;     ///< 低通开关
+  bool imu_notch_enable_ = false;  ///< 陷波开关
+  bool imu_lp_enable_ = false;     ///< 低通开关
   double imu_filt_fs_ = 197.98;   ///< IMU 采样率 (Hz)
   std::vector<double> imu_notch_f0s_;  ///< 陷波中心频率列表 (Hz)
   double imu_notch_q_ = 8.0;      ///< 陷波 Q 值 (带宽 = f0/Q)

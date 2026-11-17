@@ -129,58 +129,205 @@ void ESKF::Update() {
   fw_R_ = R_;
   fw_p_ = p_;
   fw_v_ = v_;
-  forward_time_ = current_obs_time_;
+  // 前向递推的重锚定不在这里做, 而是由
+  // NotifyForwardAnchor() 统一处理 (见该函数注释).
+  // 原因: Update() 会被 UpdateObserve() 的迭代循环多次调用,
+  // 而"丢弃缓冲 + 逐条重积分"只需要做一次, 且必须在 buffer 完整时做.
 }
 
 
-bool ESKF::Predict(const IMUData& imu, DynamicState& state_imu, DynamicState& state_robot){
-  if(!init_) {
-    return false;
-  }
+// ============================================================
+// 前向递推的单步积分:
+//     1) 半隐式: 先用角速度更新姿态, 再用【新姿态】把 body 加速度转到世界系;
+//     2) 加速度 = 原始值 * imu_scale_ - ba_;
+//     3) 世界系比力 = R * acc + g_  (g_ 是世界系重力)
+//     4) 位置/速度用梯形积分.
+// ============================================================
+void ESKF::ForwardPropagateOnce(double dt, const V3& acc_raw, const V3& gyr_raw)
+{
+  // 角速度去偏置
+  V3 gyr = gyr_raw - bg_;
 
-  /// first time predict
-  if(forward_time_ < 0){
-    forward_time_ = imu.secs;
-    forward_last_imu_ = imu;
-    return false;
-  }
-
-  double dt = imu.secs - forward_time_;
-
-  if(dt < 0 || dt > 0.2){
-    return false;
-  }
-
-  V3 acc = 0.5 * (imu.acc + forward_last_imu_.acc);
-  acc = imu_scale_ * acc;
-  acc = acc - ba_;
-  
-  V3 gyr = 0.5 * (imu.gyr + forward_last_imu_.gyr) - bg_;
-  V3 new_p = fw_p_ + fw_v_ * dt + 0.5 * (fw_R_.R() * acc) * dt * dt + 0.5 * g_ * dt * dt;
-  V3 new_v = fw_v_ + fw_R_.R() * acc * dt + g_ * dt;
-  SO3 new_R = fw_R_ * SO3::Exp(gyr , dt);
-
+  // 半隐式: 先更新姿态
+  SO3 new_R = fw_R_ * SO3::Exp(gyr, dt);
   fw_R_ = new_R;
-  fw_v_ = new_v;
-  fw_p_ = new_p;
+
+  // 加速度缩放 + 去偏置
+  V3 acc = imu_scale_ * acc_raw - ba_;
+
+  // 世界系比力 (用新姿态)
+  V3 global_acc = fw_R_.R() * acc + g_;
+
+  // 梯形积分
+  fw_p_ = fw_p_ + fw_v_ * dt + 0.5 * global_acc * dt * dt;
+  fw_v_ = fw_v_ + global_acc * dt;
+}
+
+
+// ============================================================
+// 前向递推的重锚定
+//   在 EKF 更新完成 (后验 v_ 已确定) 后由 Observe() 调用:
+//     - imu_propagate = latest_ekf_state   (前向状态重置到后验)
+//     - 丢弃早于锚点的 IMU
+//     - 剩下的 IMU 逐条重积分 (每条一个 ~5ms 的 dt)
+//   这里只做"重置 + 丢弃 + 置位", 真正的逐条重积分推迟到下一次
+//   ForwardPredict() 里做 (因为那时才知道缓冲里最新到哪一条).
+// ============================================================
+void ESKF::NotifyForwardAnchor(double anchor_time)
+{
+  // 前向状态重置到当前 EKF 后验 (fw_R_/fw_p_/fw_v_ 已在 Update() 中同步)
+  fw_anchor_time_ = anchor_time;
+
+  // 丢弃早于锚点时刻的 IMU (锚点之前的状态已由 EKF 后验给出, 不需要再递推)
+  while (!fw_imu_buffer_.empty() && fw_imu_buffer_.front().secs < anchor_time) {
+    fw_imu_buffer_.pop_front();
+  }
+
+  // 需要"逐条重积分"
+  fw_state_update_flg_ = true;
+
+  // 积分时间基重置到锚点, 下一次重积分从锚点开始.
+  fw_last_integr_time_ = anchor_time;
+  fw_inited_ = true;
+}
+
+
+// ============================================================
+//  前向递推 (纯 IMU 推算) 的主入口
+//   与 Predict(imu, state_imu, state_robot) 等价 :
+//     - 维护独立的递推 IMU 缓冲 (fw_imu_buffer_)
+//     - 锚点后逐条重积分, 步长恒为 ~5ms (而不是一次大 dt)
+// ============================================================
+bool ESKF::ForwardPredict(const IMUData& imu, DynamicState& state_imu, DynamicState& state_robot)
+{
+  // 入缓冲 (递推专用副本, 与 EKF 去畸变用的 imu_buffer_ 无关).
+  // 注意: 放在 init_ 判断之前, 否则 init 之前的 IMU 会缺失,
+  //       导致第一次锚点时缓冲不完整.
+  fw_imu_buffer_.push_back(imu);
+
+  // 缓冲不能无限增长: 锚点会丢弃旧数据, 这里再兜一个上限.
+  while (fw_imu_buffer_.size() > 2000) {
+    fw_imu_buffer_.pop_front();
+  }
+
+  if (!init_) {
+    return false;
+  }
+
+  // ---- 锚点后: 逐条重积分 ----
+  if (fw_state_update_flg_) {
+    fw_state_update_flg_ = false;
+
+    // 重置到 EKF 后验 (fw_R_/fw_p_/fw_v_ 已由 Update() 同步)
+    fw_last_integr_time_ = fw_anchor_time_;
+
+    // 逐条重放缓冲里的 IMU, 每条一个自身 dt.
+    // 加速度取值:
+    //   - 第 1 条 (区间 [锚点, t0]): 锚点前一条已被丢弃, 只能用单样本 acc;
+    //   - 之后: 用相邻两条的中点平均 (对白噪声降噪, 比单样本更平滑).
+    //   FastLIVO2 全部用单样本; 这里在保持"逐条细粒度步长"这个关键行为
+    //   一致的前提下, 对可配对的区间额外做了中点平均.
+    bool has_prev = false;
+    IMUData prev_imu;
+    V3 last_gyr_used = V3::Zero();
+    V3 last_acc_used = V3::Zero();
+    for (const auto& imu_item : fw_imu_buffer_) {
+      double dt = imu_item.secs - fw_last_integr_time_;
+      if (dt <= 0.0) {
+        // 该样本落在锚点时刻或之前, 不积分, 但要作为中点配对的"前一条"保留.
+        prev_imu = imu_item;
+        has_prev = true;
+        continue;
+      }
+      if (dt > 0.2) break;   // 异常间隔, 丢弃后面的
+
+      V3 acc_use = imu_item.acc;
+      V3 gyr_use = imu_item.gyr;
+      if (has_prev) {
+        acc_use = 0.5 * (imu_item.acc + prev_imu.acc);
+        gyr_use = 0.5 * (imu_item.gyr + prev_imu.gyr);
+      }
+
+      ForwardPropagateOnce(dt, acc_use, gyr_use);
+      fw_last_integr_time_ = imu_item.secs;
+      fw_last_imu_ = imu_item;
+      prev_imu = imu_item;
+      has_prev = true;
+      last_gyr_used = gyr_use - bg_;
+      last_acc_used = imu_scale_ * acc_use - ba_;
+    }
+
+    state_imu.time = imu.secs;
+    state_imu.R = fw_R_.R_;
+    state_imu.p = fw_p_;
+    state_imu.v = fw_v_;
+    state_imu.w = last_gyr_used;
+    state_imu.a = last_acc_used;
+
+    SO3 robo_R;
+    robo_R.R_ = fw_R_.R_ * g_odom_robo.R_;
+    V3 robo_p = fw_R_.R() * (-g_odom_robo.R_ * g_odom_robo.t_) + fw_p_;
+    state_robot.time = imu.secs;
+    state_robot.R = robo_R.R_;
+    state_robot.p = robo_p;
+
+    return true;
+  }
+
+  // ---- 锚点之后的连续推进 ----
+  if (!fw_inited_) {
+    // 还没锚定过 (等待第一个 EKF 后验)
+    fw_last_integr_time_ = imu.secs;
+    fw_last_imu_ = imu;
+    fw_inited_ = true;
+    return false;
+  }
+
+  double dt = imu.secs - fw_last_integr_time_;
+  if (dt <= 0.0) {
+    // 时间倒退或重复样本: 只更新历史, 不积分
+    fw_last_imu_ = imu;
+    return false;
+  }
+  if (dt > 0.2) {
+    // 异常大间隔: 重新锚定到当前时刻, 避免用一条 acc 外推一大段
+    fw_last_integr_time_ = imu.secs;
+    fw_last_imu_ = imu;
+    return false;
+  }
+
+  // 中点平均 (相邻两条 IMU 间隔正常时, 这是有效的降噪手段)
+  V3 acc_mid = 0.5 * (imu.acc + fw_last_imu_.acc);
+  V3 gyr_mid = 0.5 * (imu.gyr + fw_last_imu_.gyr);
+
+  ForwardPropagateOnce(dt, acc_mid, gyr_mid);
+
+  fw_last_integr_time_ = imu.secs;
+  fw_last_imu_ = imu;
 
   state_imu.time = imu.secs;
   state_imu.R = fw_R_.R_;
   state_imu.p = fw_p_;
   state_imu.v = fw_v_;
-  state_imu.w = gyr;
-  state_imu.a = acc;
-  forward_time_ = imu.secs;
-  forward_last_imu_ = imu;
+  state_imu.w = gyr_mid - bg_;
+  state_imu.a = imu_scale_ * acc_mid - ba_;
 
-  new_R.R_ = fw_R_.R_ * g_odom_robo.R_;
-  new_p = fw_R_.R_ * ( - g_odom_robo.R_ * g_odom_robo.t_) + fw_p_;
+  SO3 robo_R;
+  robo_R.R_ = fw_R_.R_ * g_odom_robo.R_;
+  V3 robo_p = fw_R_.R() * (-g_odom_robo.R_ * g_odom_robo.t_) + fw_p_;
   state_robot.time = imu.secs;
-  state_robot.R = new_R.R_;
-  state_robot.p = new_p;
-  // todo: v, w, a
+  state_robot.R = robo_R.R_;
+  state_robot.p = robo_p;
 
   return true;
+}
+
+
+bool ESKF::Predict(const IMUData& imu, DynamicState& state_imu, DynamicState& state_robot){
+  // 已统一走 ForwardPredict().
+  // 旧实现在 EKF 锚点后不做"逐条重积分", 会用单条 acc 外推一大段 dt,
+  // 导致每个 LIO 帧向速度注入一个尖峰.
+  return ForwardPredict(imu, state_imu, state_robot);
 }
 
 

@@ -541,6 +541,8 @@ void SuperLIO::Observe(){
     iter_num++;
   });
 
+  kf_->NotifyForwardAnchor(measures_.lidar.end_time);
+
   frame_num_++;
 }
 
