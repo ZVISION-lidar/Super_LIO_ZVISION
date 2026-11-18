@@ -80,6 +80,24 @@ public:
 
   void SetX(const SysState& x);
 
+  /// [LOOP-CLOSURE] 位姿图优化结果回写.
+  ///
+  /// 与 SetX() 的区别 (关键):
+  ///   SetX() 会把 last_imu_time_ / current_time_ 一起改成外部给的时间戳,
+  ///   这会破坏 IMU 递推的时间基准 (下一次 Predict 计算出的 dt 会突变),
+  ///   因此不能用于回环优化后的状态回写.
+  ///
+  /// CorrectPose() 只修改"当前时刻的位姿/速度", 保持时间基准不动:
+  ///   - R_ / p_ / v_ : 后验状态
+  ///   - fw_R_ / fw_p_ / fw_v_ : 前向递推状态 (同步, 避免前向预测跳变)
+  ///   - 不动 last_imu_time_ / current_time_ / last_obs_time_ / fw_last_integr_time_
+  ///
+  /// @param R_new 优化后的姿态 (body -> world)
+  /// @param p_new 优化后的位置 (world 系)
+  /// @param R_old 优化前的姿态 (body -> world), 用来求 world 系的旋转修正量
+  void CorrectPose(const BASIC::SO3& R_new, const BASIC::V3& p_new,
+                   const BASIC::SO3& R_old);
+
   void SetCov(const COV& cov){ P_ = cov; }
 
   BASIC::V3 GetGravity() const { return g_; }

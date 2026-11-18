@@ -72,6 +72,13 @@ std::tuple<float, float, float> getColorFromVelocity(float velocity, float max_v
 
 void livox2pcl(const livox_ros_driver::CustomMsg::ConstPtr& msg, BASIC::CloudPtr& point_cloud);
 
+/// [LOOP-CLOSURE] 一条回环边的信息 (用于可视化).
+struct LoopEdgeInfo {
+  std::size_t from_index = 0;
+  std::size_t to_index = 0;
+  double fitness_score = 0.0;
+};
+
 class ROSWrapper{
 public:
   ROSWrapper();
@@ -111,6 +118,9 @@ public:
 
   void pub_odom(const NavState&);
   void pub_cloud_world(const BASIC::CloudPtr& pc, double time);
+  /// [LOOP-CLOSURE] 发布回环边与优化后的关键帧轨迹.
+  void pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
+                        const std::vector<LoopEdgeInfo>& edges);
   void pub_cloud2planner(const BASIC::CloudPtr& pc, double time);
   void pub_cloud_body_pose(const BASIC::CloudPtr& pc, 
                            const NavState& state);
@@ -273,8 +283,9 @@ private:
   bool imu_filt_initialized_ = false;
 
   /// 滤波器参数（可由配置文件覆盖）
-  bool imu_notch_enable_ = true;  ///< 陷波开关
-  bool imu_lp_enable_ = true;     ///< 低通开关
+  /// [默认关闭] 滤波会引入相位延迟, 且与 FastLIVO2 的裸 IMU 直推行为不一致.
+  bool imu_notch_enable_ = false;  ///< 陷波开关
+  bool imu_lp_enable_ = false;     ///< 低通开关
   double imu_filt_fs_ = 197.98;   ///< IMU 采样率 (Hz)
   std::vector<double> imu_notch_f0s_ = {43.42, 19.61};  ///< 陷波中心频率 (Hz)
   double imu_notch_q_ = 8.0;      ///< 陷波 Q 值 (带宽 = f0/Q)
@@ -284,6 +295,10 @@ private:
   ros::Publisher pub_odom_;        // imu frame -> lidar frequency
   ros::Publisher pub_path_;        // robo path
   ros::Publisher pub_path_robot_;
+  /// [LOOP-CLOSURE] 回环可视化
+  ros::Publisher pub_loop_edges_;   // LINE_LIST
+  ros::Publisher pub_loop_nodes_;   // SPHERE_LIST
+  ros::Publisher pub_loop_path_;    // 优化后的关键帧轨迹
 
   nav_msgs::Path path_;
   sensor_msgs::PointCloud2 msg_path_point_;

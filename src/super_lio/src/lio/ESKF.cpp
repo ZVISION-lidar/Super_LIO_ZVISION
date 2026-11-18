@@ -75,6 +75,39 @@ void ESKF::SetX(const SysState& x) {
 }
 
 
+// ============================================================
+// [LOOP-CLOSURE] 位姿图优化结果回写
+//   只改位姿/速度, 不动 IMU 时间基准.
+//   见头文件注释: 为什么不能用 SetX().
+//
+//   坐标约定:
+//     R_ : body(imu) -> world 的旋转
+//     p_ : world 系位置
+//     v_ : world 系速度 (ForwardPropagateOnce 里 global_acc 累加的是 world 系)
+// ============================================================
+void ESKF::CorrectPose(const SO3& R_new, const V3& p_new, const SO3& R_old)
+{
+  // 修正量是 world 系的左乘修正:  T_new = T_corr * T_old
+  //   => R_corr = R_new * R_old^{-1}
+  // world 系的速度也要跟着这个 world 系旋转一起转:
+  //   v_new = R_corr * v_old
+  // (等价地, body 系的速度保持不变)
+  const M3 R_corr = R_new.R() * R_old.R().transpose();
+  const V3 v_new = R_corr * v_;
+
+  R_ = R_new;
+  p_ = p_new;
+  v_ = v_new;
+
+  // 前向递推状态同步 (不重置 fw_last_integr_time_, 保持时间连续).
+  fw_R_ = R_new;
+  fw_p_ = p_new;
+  fw_v_ = v_new;
+
+  // 协方差不变: 优化只修正均值, 不改变不确定度.
+}
+
+
 void ESKF::BuildNoise(const Options& options) {
   double et = options.gyro_var_;
   double ev = options.acce_var_;

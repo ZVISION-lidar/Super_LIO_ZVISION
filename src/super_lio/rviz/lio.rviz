@@ -26,6 +26,7 @@ Panels:
         - /Axes1/Radius1
         - /Axes1/Show Trail1
         - /Axes1/Alpha1
+        - /map1
         - /map1/Topic1
         - /map1/Unreliable1
         - /map1/Queue Size1
@@ -163,7 +164,7 @@ Panels:
         - /robo_odom1/Odometry1/Covariance1/Orientation1/Offset1
         - /robo_odom1/Odometry1/Covariance1/Orientation1/Scale1
       Splitter Ratio: 0.5058823823928833
-    Tree Height: 303
+    Tree Height: 1087
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -181,7 +182,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: ""
+    SyncSource: current
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -216,11 +217,11 @@ Visualization Manager:
       Reference Frame: world
       Show Trail: false
       Value: true
-    - Alpha: 0.15000000596046448
+    - Alpha: 0.30000001192092896
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 33.29008102416992
-        Min Value: -3.284268379211426
+        Max Value: 3.2953782081604004
+        Min Value: -0.08068592846393585
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -734,7 +735,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/ThirdPersonFollower
-      Distance: 131.35813903808594
+      Distance: 25.13922119140625
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -742,17 +743,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0.763012170791626
-        Y: -3.092193603515625
+        X: 0.441794753074646
+        Y: -1.4745992422103882
         Z: -1.52587890625e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.4553990066051483
+      Pitch: 1.5697963237762451
       Target Frame: world
-      Yaw: 4.5385589599609375
+      Yaw: 4.718571662902832
     Saved: ~
 Window Geometry:
   Displays:

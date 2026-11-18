@@ -66,7 +66,7 @@ void SuperLIO::init(){
   ivox_.reset(new OctVoxMapType(OctVoxMapType::Options{g_ivox_resolution, g_ivox_capacity}));
   kf_.reset(new ESKF());
   data_wrapper_->setESKF(kf_);
-  
+
   scan_undistort_full_.reset(new PointCloudType());
   ds_undistort_.reset(new PointCloudType());
   world_pc_.reset(new PointCloudType());
@@ -75,7 +75,20 @@ void SuperLIO::init(){
   if(g_save_map){
     point_map_.reset(new PointCloudType());
   }
-  
+
+  // ============================================================
+  // [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  //   总开关关闭时, 行为与原来完全一致 (不启动线程, 不记录关键帧).
+  // ============================================================
+  if(g_loop_closure_enable){
+    loop_closure_.reset(new LoopClosureManager());
+    loop_closure_->configure();
+    loop_closure_->start();
+    LOG(INFO) << GREEN << " ---> [SuperLIO]: loop closure enabled." << RESET;
+  }else{
+    LOG(INFO) << GREEN << " ---> [SuperLIO]: loop closure disabled." << RESET;
+  }
+
   points_world_v3_.reserve(21000);
   effect_mask_.resize(20000, false);
   effect_knn_mask_.resize(20000, false);
@@ -206,8 +219,130 @@ void SuperLIO::stateProcess(){
     Observe();
     UpdateMap();
   }
+  // [LOOP-CLOSURE] 先消费回环约束并优化, 再记录新关键帧.
+  //   顺序很重要: 先让位姿图吸收回环修正, 新关键帧的里程计因子
+  //   才能建立在"已修正"的图上.
+  applyLoopWriteback();
+  updateKeyframe();
   Output();
   caceData();
+  publishLoopVisualization();
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 关键帧记录
+//   关键帧点云保存在 IMU 系 (与 kf_->GetSE3() 同系), 位姿是 T_world_body.
+//   这样 ICP 与地图重拼接都不需要 lidar<->body 外参转换.
+// ============================================================
+void SuperLIO::updateKeyframe(){
+  if(!loop_closure_) return;
+  if(!ds_undistort_ || ds_undistort_->empty()) return;
+
+  // ds_undistort_ 就是 imu 系点云, 直接用.
+  BASIC::SE3 corr;
+  if(loop_closure_->maybeAddKeyframe(kf_->GetSE3(), ds_undistort_, corr)){
+    // 新关键帧建立后, 位姿图可能对当前节点产生了偏移, 需要回写.
+    applyCorrection(corr);
+  }
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 把位姿图优化结果回写到 ESKF
+//   注意: 必须用 CorrectPose(), 不能用 SetX().
+//   SetX() 会改写 last_imu_time_, 破坏 IMU 递推的时间基准.
+//
+//   施加方式: T_new = T_corr * T_cur  (T_corr 是世界系下的刚体修正)
+// ============================================================
+void SuperLIO::applyCorrection(const BASIC::SE3& T_corr){
+  if(!loop_closure_ || !g_loop_writeback_enable) return;
+
+  const BASIC::SE3 cur_pose = kf_->GetSE3();
+  const BASIC::SE3 new_pose = T_corr * cur_pose;
+
+  kf_->CorrectPose(BASIC::SO3(new_pose.R_), new_pose.t_, BASIC::SO3(cur_pose.R_));
+
+  LOG(INFO) << GREEN << " ---> [SuperLIO]: loop writeback applied, "
+            << "dp = [" << (new_pose.t_ - cur_pose.t_).x() << ", "
+            << (new_pose.t_ - cur_pose.t_).y() << ", "
+            << (new_pose.t_ - cur_pose.t_).z() << "]" << RESET;
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 消费回环约束 -> 位姿图优化 -> 回写 ESKF
+//   必须在主线程做 (与 EKF 更新串行), 保证帧一致性.
+// ============================================================
+void SuperLIO::applyLoopWriteback(){
+  if(!loop_closure_ || !g_loop_writeback_enable) return;
+
+  BASIC::SE3 T_corr;
+  if(!loop_closure_->processLoops(T_corr)) return;
+
+  applyCorrection(T_corr);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 回环可视化
+//   发布回环边 (LINE_LIST) 和优化后的关键帧轨迹.
+// ============================================================
+void SuperLIO::publishLoopVisualization(){
+  if(!loop_closure_) return;
+
+  // 限频, 避免刷屏.
+  if(++loop_vis_counter_ < 10) return;
+  loop_vis_counter_ = 0;
+
+  const std::vector<BASIC::SE3> poses = loop_closure_->optimizedPoses();
+  const std::vector<LoopClosureManager::LoopEdge> edges =
+      loop_closure_->loopEdges();
+
+  std::vector<LoopEdgeInfo> ros_edges;
+  ros_edges.reserve(edges.size());
+  for(const auto& edge : edges){
+    ros_edges.push_back({edge.from_index, edge.to_index, edge.fitness_score});
+  }
+  data_wrapper_->pub_loop_closure(poses, ros_edges);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 关键帧重拼接保存地图
+//   用 ISAM2 优化后的关键帧位姿把关键帧点云 (imu 系) 变换到世界系再拼接.
+//   这样保存出的地图与优化后的位姿完全一致 (不需要重建在线地图).
+// ============================================================
+bool SuperLIO::saveMapByKeyframe(const std::string& file_name){
+  if(!loop_closure_) return false;
+
+  BASIC::CloudPtr map_cloud(new PointCloudType());
+  if(!loop_closure_->keyframeManager()->getAllWorldCloud(map_cloud)) return false;
+
+  // 降采样
+  // 注意 PCL 1.10 的 API:
+  //   setInputCloud(shared_ptr)  -- 传指针
+  //   filter(reference)          -- 传引用 (输出可以是栈对象)
+  if(g_if_filter){
+    PointCloudType filtered;
+    pcl::VoxelGrid<PointType> voxel_filter;
+    voxel_filter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
+    voxel_filter.setInputCloud(map_cloud);
+    voxel_filter.filter(filtered);
+    map_cloud.reset(new PointCloudType());
+    *map_cloud = filtered;
+  }
+
+  if(map_cloud->empty()) return false;
+
+  map_cloud->width = map_cloud->size();
+  map_cloud->height = 1;
+  map_cloud->is_dense = false;
+
+  pcl::io::savePCDFileBinary(file_name, *map_cloud);
+  LOG(INFO) << GREEN << " ---> [SuperLIO]: keyframe map saved to: " << file_name
+            << ", size: " << map_cloud->size() << RESET;
+  return true;
 }
 
 
@@ -314,6 +449,21 @@ void SuperLIO::ProcessCaceMap(){
 
 void SuperLIO::saveMap(){
   if(!g_save_map) return;
+
+  // ============================================================
+  // [LOOP-CLOSURE] 开启回环时, 用关键帧重拼接保存地图.
+  //   这样保存的地图与 ISAM2 优化后的位姿完全一致,
+  //   而在线地图 (OctVoxMap) 保持原样, 不做重建 (与 fastlio_sam 一致).
+  // ============================================================
+  if(loop_closure_ && g_loop_keyframe_map_enable){
+    const std::string map_name = g_save_map_dir + "/" + g_map_name;
+    LOG(INFO) << YELLOW << " ---> Saving map by keyframe (aligned with "
+              << "pose graph optimization) ..." << RESET;
+    if(saveMapByKeyframe(map_name)) return;
+    LOG(WARNING) << YELLOW << " ---> Keyframe map saving failed, "
+                 << "fallback to the online map ..." << RESET;
+  }
+
   if(g_pcd_save_interval > 0){
     LOG(INFO) << YELLOW << " ---> Saving last cace ... " << RESET;
     if (point_map_->size() > 0) {
@@ -588,6 +738,11 @@ void SuperLIO::Output(){
 void SuperLIO::printTimeRecord(){
   if(!g_time_eva) return;
   time_record_.PrintAll();
+}
+
+SuperLIO::~SuperLIO(){
+  // [LOOP-CLOSURE] 停止回环线程.
+  if(loop_closure_) loop_closure_->stop();
 }
 
 } // namespace END.

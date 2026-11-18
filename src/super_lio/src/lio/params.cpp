@@ -39,8 +39,10 @@ namespace LI2Sup{
   double g_imu_nbg;
 
   /// IMU vibration suppression filter
-  bool   g_imu_notch_enable = true;
-  bool   g_imu_lp_enable   = true;
+  /// [默认关闭] 滤波会引入相位延迟, 且与 FastLIVO2 的裸 IMU 直推行为不一致.
+  ///   需要开启时在 yaml 里显式设置 imu_notch_enable / imu_lp_enable: true.
+  bool   g_imu_notch_enable = false;
+  bool   g_imu_lp_enable   = false;
   double g_imu_filt_fs     = 197.98;
   std::vector<double> g_imu_notch_f0s = {43.42, 19.61};
   double g_imu_notch_q     = 8.0;
@@ -82,5 +84,41 @@ namespace LI2Sup{
   /// for relocation
   bool g_update_map = false;
   double g_init_px, g_init_py, g_init_pz, g_init_roll, g_init_pitch, g_init_yaw;
+
+  /// ============================================================
+  /// [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  /// ============================================================
+  bool   g_loop_closure_enable = false;
+  double g_loop_closure_frequency = 2.0;
+
+  double g_keyframe_dist = 1.0;
+  double g_keyframe_angle = 0.2;
+
+  int    g_sc_num_rings = 20;
+  int    g_sc_num_sectors = 60;
+  double g_sc_max_radius = 80.0;
+  double g_sc_lidar_height = 2.0;
+  int    g_sc_exclude_recent = 30;
+  int    g_sc_num_candidates = 10;
+  double g_sc_search_ratio = 0.1;
+  double g_sc_distance_threshold = 0.15;
+
+  int    g_icp_max_correspondence_distance = 15;
+  int    g_icp_max_iterations = 100;
+  double g_icp_fitness_score_threshold = 0.6;
+  int    g_icp_history_search_num = 5;
+
+  // GTSAM 噪声 (1-sigma).
+  // 里程计因子比回环因子更可信, 所以 sigma 更小.
+  double g_pg_odom_rot_sigma = 1e-3;
+  double g_pg_odom_trans_sigma = 1e-2;
+  double g_pg_loop_rot_sigma = 5e-3;
+  double g_pg_loop_trans_sigma = 5e-2;
+  // 先验因子把节点 0 锚死在初始里程计系, sigma 要极小.
+  double g_pg_prior_rot_sigma = 1e-6;
+  double g_pg_prior_trans_sigma = 1e-6;
+
+  bool   g_loop_writeback_enable = true;
+  bool   g_loop_keyframe_map_enable = true;
 
 }

@@ -34,4 +34,10 @@
   <run_depend>python3</run_depend>
   <run_depend>python3-psutil</run_depend>
 
+  <!-- [LOOP-CLOSURE] GTSAM: ISAM2 位姿图优化 -->
+  <!-- 注意: 本 package.xml 使用 format version 1, 只支持 build_depend / run_depend,
+       不能使用 build_export_depend / exec_depend (catkin_make 会直接报错). -->
+  <build_depend>gtsam</build_depend>
+  <run_depend>gtsam</run_depend>
+
 </package>

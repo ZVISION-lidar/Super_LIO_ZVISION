@@ -109,6 +109,47 @@ namespace LI2Sup{
   extern bool g_update_map;
   extern double g_init_px, g_init_py, g_init_pz, g_init_roll, g_init_pitch, g_init_yaw;
 
+  /// ============================================================
+  /// [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  /// ============================================================
+  /// 总开关. false 时不启动回环线程, 行为与原来完全一致.
+  extern bool g_loop_closure_enable;
+  /// 回环检测线程频率 (Hz)
+  extern double g_loop_closure_frequency;
+
+  /// 关键帧判定阈值
+  extern double g_keyframe_dist;      ///< 位移阈值 (m)
+  extern double g_keyframe_angle;     ///< 角度阈值 (rad)
+
+  /// Scan Context 参数
+  extern int    g_sc_num_rings;       ///< 环数 (径向)
+  extern int    g_sc_num_sectors;     ///< 扇区数 (角向)
+  extern double g_sc_max_radius;      ///< 最大半径 (m)
+  extern double g_sc_lidar_height;    ///< 雷达安装高度补偿 (m)
+  extern int    g_sc_exclude_recent;  ///< 排除最近 N 个关键帧
+  extern int    g_sc_num_candidates;  ///< 候选数量
+  extern double g_sc_search_ratio;    ///< 角度搜索范围比例
+  extern double g_sc_distance_threshold; ///< 描述子距离阈值
+
+  /// ICP 几何验证参数
+  extern int    g_icp_max_correspondence_distance;  ///< 最大对应点距离
+  extern int    g_icp_max_iterations;
+  extern double g_icp_fitness_score_threshold;     ///< 匹配质量阈值 (越小越好)
+  extern int    g_icp_history_search_num;          ///< 历史 submap 前后各取几个关键帧
+
+  /// GTSAM 位姿图优化参数 (噪声 1-sigma)
+  extern double g_pg_odom_rot_sigma;
+  extern double g_pg_odom_trans_sigma;
+  extern double g_pg_loop_rot_sigma;
+  extern double g_pg_loop_trans_sigma;
+  extern double g_pg_prior_rot_sigma;
+  extern double g_pg_prior_trans_sigma;
+
+  /// 回环优化后是否把优化位姿回写到 ESKF (前端里程计对齐)
+  extern bool   g_loop_writeback_enable;
+  /// 回环优化后是否用关键帧重拼接地图 (SaveMapByKeyframe)
+  extern bool   g_loop_keyframe_map_enable;
+
 }
 
 #endif

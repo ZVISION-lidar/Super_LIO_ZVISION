@@ -1,7 +1,7 @@
 lio:
   # Map settings
   map:
-    save_map: true
+    save_map: false
     if_filter: true
     save_map_dir: "map"
     map_name: "map.pcd"
@@ -10,15 +10,17 @@ lio:
 
   # ROS Topic input
   ros:
-    lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
-    imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
+    # lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
+    # imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
+    lidar_topic: "/zvlidar_points_xyzirt"
+    imu_topic: "/zvlidar_imu_msg"
 
   # Sensor Configuration
   sensor:
     lidar_type: 8
-    blind: 0.8
+    blind: 1
     maxrange: 50.0
-    filter_rate: 1
+    filter_rate: 8
     enable_downsample: true
     voxel_fliter_size: 0.5
     gravity_norm: 9.85

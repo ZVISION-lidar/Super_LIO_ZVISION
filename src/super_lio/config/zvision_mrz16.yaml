@@ -16,8 +16,8 @@ lio:
   # Sensor Configuration
   sensor:
     lidar_type: 8
-    blind: 2.0
-    maxrange: 80.0
+    blind: 0.3
+    maxrange: 150.0
     filter_rate: 1
     enable_downsample: true
     voxel_fliter_size: 0.3
@@ -45,7 +45,7 @@ lio:
   kf:
     kf_type: 0
     kf_max_iterations: 5
-    kf_align_gravity: true
+    kf_align_gravity: false
     kf_quit_eps: 0.001
 
   # output

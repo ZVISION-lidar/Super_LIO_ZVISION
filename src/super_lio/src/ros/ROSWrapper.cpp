@@ -127,7 +127,51 @@ void LoadParamFromRos(ros::NodeHandle& nh){
     g_init_pitch = 0.0f;
     g_init_yaw = 0.0f;
   }
-  
+
+  // ============================================================
+  // [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  // ============================================================
+  nh.getParam("/lio/loop_closure/enable", g_loop_closure_enable);
+  nh.getParam("/lio/loop_closure/frequency", g_loop_closure_frequency);
+  LOG(INFO) << GREEN << " ---> [Param] loop_closure/enable: "
+            << (g_loop_closure_enable ? "true" : "false")
+            << ", frequency: " << g_loop_closure_frequency << " Hz" << RESET;
+
+  nh.getParam("/lio/loop_closure/keyframe_dist", g_keyframe_dist);
+  nh.getParam("/lio/loop_closure/keyframe_angle", g_keyframe_angle);
+
+  nh.getParam("/lio/loop_closure/sc_num_rings", g_sc_num_rings);
+  nh.getParam("/lio/loop_closure/sc_num_sectors", g_sc_num_sectors);
+  nh.getParam("/lio/loop_closure/sc_max_radius", g_sc_max_radius);
+  nh.getParam("/lio/loop_closure/sc_lidar_height", g_sc_lidar_height);
+  nh.getParam("/lio/loop_closure/sc_exclude_recent", g_sc_exclude_recent);
+  nh.getParam("/lio/loop_closure/sc_num_candidates", g_sc_num_candidates);
+  nh.getParam("/lio/loop_closure/sc_search_ratio", g_sc_search_ratio);
+  nh.getParam("/lio/loop_closure/sc_distance_threshold", g_sc_distance_threshold);
+
+  nh.getParam("/lio/loop_closure/icp_max_correspondence_distance",
+              g_icp_max_correspondence_distance);
+  nh.getParam("/lio/loop_closure/icp_max_iterations", g_icp_max_iterations);
+  nh.getParam("/lio/loop_closure/icp_fitness_score_threshold",
+              g_icp_fitness_score_threshold);
+  nh.getParam("/lio/loop_closure/icp_history_search_num",
+              g_icp_history_search_num);
+
+  nh.getParam("/lio/loop_closure/pg_odom_rot_sigma", g_pg_odom_rot_sigma);
+  nh.getParam("/lio/loop_closure/pg_odom_trans_sigma", g_pg_odom_trans_sigma);
+  nh.getParam("/lio/loop_closure/pg_loop_rot_sigma", g_pg_loop_rot_sigma);
+  nh.getParam("/lio/loop_closure/pg_loop_trans_sigma", g_pg_loop_trans_sigma);
+  nh.getParam("/lio/loop_closure/pg_prior_rot_sigma", g_pg_prior_rot_sigma);
+  nh.getParam("/lio/loop_closure/pg_prior_trans_sigma", g_pg_prior_trans_sigma);
+
+  nh.getParam("/lio/loop_closure/writeback_enable", g_loop_writeback_enable);
+  nh.getParam("/lio/loop_closure/keyframe_map_enable", g_loop_keyframe_map_enable);
+
+  if (g_sc_exclude_recent < 1) g_sc_exclude_recent = 1;
+  if (g_sc_num_candidates < 1) g_sc_num_candidates = 1;
+  if (g_icp_history_search_num < 0) g_icp_history_search_num = 0;
+  if (g_loop_closure_frequency <= 0.0) g_loop_closure_frequency = 1.0;
+
 }
 
 std::tuple<float, float, float> getColorFromVelocity(float velocity, float max_velocity = 2.0f) {
@@ -231,6 +275,11 @@ ROSWrapper::ROSWrapper(){
   pub_odom_      = nh_.advertise<nav_msgs::Odometry>("/lio/odom", 100);  /// imu frame -> lidar freq
   pub_path_      = nh_.advertise<nav_msgs::Path>("/lio/path", 1);
   pub_path_robot_ = nh_.advertise<sensor_msgs::PointCloud2>("/lio/path_robot", 1);
+
+  /// [LOOP-CLOSURE] 回环可视化
+  pub_loop_edges_ = nh_.advertise<visualization_msgs::Marker>("/lio/loop_edges", 1);
+  pub_loop_nodes_ = nh_.advertise<visualization_msgs::Marker>("/lio/loop_nodes", 1);
+  pub_loop_path_  = nh_.advertise<nav_msgs::Path>("/lio/loop_path", 1);
   
   msg_path_point_.header.frame_id = "world";
   msg2uav_.header.frame_id = "world";
@@ -727,8 +776,97 @@ void ROSWrapper::pub_cloud_world(const CloudPtr& pc,double time){
 }
 
 
-void ROSWrapper::pub_cloud2planner(const CloudPtr& pc, double time){
-  static ros::Publisher pub_cloud2robot_ = nh_.advertise<sensor_msgs::PointCloud2>
+// ============================================================
+// [LOOP-CLOSURE] 发布回环边 + 优化后的关键帧轨迹
+// ============================================================
+void ROSWrapper::pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
+                                  const std::vector<LoopEdgeInfo>& edges){
+  if(keyframe_poses.empty()) return;
+
+  const ros::Time stamp = ros::Time::now();
+
+  // ---- 回环节点 (SPHERE_LIST) ----
+  visualization_msgs::Marker marker_node;
+  marker_node.header.frame_id = "world";
+  marker_node.header.stamp = stamp;
+  marker_node.action = visualization_msgs::Marker::ADD;
+  marker_node.type = visualization_msgs::Marker::SPHERE_LIST;
+  marker_node.ns = "loop_nodes";
+  marker_node.id = 0;
+  marker_node.pose.orientation.w = 1;
+  marker_node.scale.x = 0.3;
+  marker_node.scale.y = 0.3;
+  marker_node.scale.z = 0.3;
+  marker_node.color.r = 0.0f;
+  marker_node.color.g = 0.8f;
+  marker_node.color.b = 1.0f;
+  marker_node.color.a = 1.0f;
+
+  // ---- 回环边 (LINE_LIST) ----
+  visualization_msgs::Marker marker_edge;
+  marker_edge.header.frame_id = "world";
+  marker_edge.header.stamp = stamp;
+  marker_edge.action = visualization_msgs::Marker::ADD;
+  marker_edge.type = visualization_msgs::Marker::LINE_LIST;
+  marker_edge.ns = "loop_edges";
+  marker_edge.id = 1;
+  marker_edge.pose.orientation.w = 1;
+  marker_edge.scale.x = 0.1;
+  marker_edge.color.r = 0.9f;
+  marker_edge.color.g = 0.9f;
+  marker_edge.color.b = 0.0f;
+  marker_edge.color.a = 1.0f;
+
+  for(const auto& edge : edges){
+    if(edge.from_index >= keyframe_poses.size() ||
+       edge.to_index >= keyframe_poses.size()) continue;
+
+    const BASIC::SE3& pose_from = keyframe_poses[edge.from_index];
+    const BASIC::SE3& pose_to = keyframe_poses[edge.to_index];
+
+    geometry_msgs::Point p_from, p_to;
+    p_from.x = pose_from.t_.x();
+    p_from.y = pose_from.t_.y();
+    p_from.z = pose_from.t_.z();
+    p_to.x = pose_to.t_.x();
+    p_to.y = pose_to.t_.y();
+    p_to.z = pose_to.t_.z();
+
+    marker_node.points.push_back(p_from);
+    marker_node.points.push_back(p_to);
+    marker_edge.points.push_back(p_from);
+    marker_edge.points.push_back(p_to);
+  }
+
+  if(!marker_edge.points.empty()){
+    pub_loop_edges_.publish(marker_edge);
+    pub_loop_nodes_.publish(marker_node);
+  }
+
+  // ---- 优化后的关键帧轨迹 ----
+  nav_msgs::Path loop_path;
+  loop_path.header.frame_id = "world";
+  loop_path.header.stamp = stamp;
+  loop_path.poses.reserve(keyframe_poses.size());
+  for(const auto& pose : keyframe_poses){
+    geometry_msgs::PoseStamped ps;
+    ps.header = loop_path.header;
+    ps.pose.position.x = pose.t_.x();
+    ps.pose.position.y = pose.t_.y();
+    ps.pose.position.z = pose.t_.z();
+    // 注意: M3::coeffs() 是矩阵展开, 不是四元数, 必须走 SO3::coeffs().
+    const V4 q = BASIC::SO3(pose.R_).coeffs();
+    ps.pose.orientation.x = q[0];
+    ps.pose.orientation.y = q[1];
+    ps.pose.orientation.z = q[2];
+    ps.pose.orientation.w = q[3];
+    loop_path.poses.push_back(ps);
+  }
+  pub_loop_path_.publish(loop_path);
+}
+
+
+void ROSWrapper::pub_cloud2planner(const CloudPtr& pc, double time){  static ros::Publisher pub_cloud2robot_ = nh_.advertise<sensor_msgs::PointCloud2>
                                             ("/lio/robo/cloud_world", 10);
   sensor_msgs::PointCloud2 cloud;
   pcl::toROSMsg(*pc, cloud);
