@@ -21,7 +21,6 @@ Panels:
         - /Grid1/Offset1/X1
         - /Grid1/Offset1/Y1
         - /Grid1/Offset1/Z1
-        - /Axes1
         - /Axes1/Reference Frame1
         - /Axes1/Length1
         - /Axes1/Radius1
@@ -76,7 +75,6 @@ Panels:
         - /current1/Autocompute Intensity Bounds1
         - /current1/Min Intensity1
         - /current1/Max Intensity1
-        - /Path1
         - /Path1/Topic1
         - /Path1/Unreliable1
         - /Path1/Queue Size1
@@ -97,35 +95,34 @@ Panels:
         - /Path1/Head Length1
         - /Path1/Shaft Diameter1
         - /Path1/Head Diameter1
-        - /lidar_odom1
-        - /lidar_odom1/Odometry1
-        - /lidar_odom1/Odometry1/Topic1
-        - /lidar_odom1/Odometry1/Unreliable1
-        - /lidar_odom1/Odometry1/Queue Size1
-        - /lidar_odom1/Odometry1/Position Tolerance1
-        - /lidar_odom1/Odometry1/Angle Tolerance1
-        - /lidar_odom1/Odometry1/Keep1
-        - /lidar_odom1/Odometry1/Shape1
-        - /lidar_odom1/Odometry1/Shape1/Color1
-        - /lidar_odom1/Odometry1/Shape1/Alpha1
-        - /lidar_odom1/Odometry1/Shape1/Shaft Length1
-        - /lidar_odom1/Odometry1/Shape1/Shaft Radius1
-        - /lidar_odom1/Odometry1/Shape1/Head Length1
-        - /lidar_odom1/Odometry1/Shape1/Head Radius1
-        - /lidar_odom1/Odometry1/Shape1/Axes Length1
-        - /lidar_odom1/Odometry1/Shape1/Axes Radius1
-        - /lidar_odom1/Odometry1/Covariance1/Position1
-        - /lidar_odom1/Odometry1/Covariance1/Position1/Color1
-        - /lidar_odom1/Odometry1/Covariance1/Position1/Alpha1
-        - /lidar_odom1/Odometry1/Covariance1/Position1/Scale1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1/Frame1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1/Color Style1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1/Color1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1/Alpha1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1/Offset1
-        - /lidar_odom1/Odometry1/Covariance1/Orientation1/Scale1
-        - /robo_odom1/Pose1
+        - /lio_odom1
+        - /lio_odom1/lidar_odom1/Topic1
+        - /lio_odom1/lidar_odom1/Unreliable1
+        - /lio_odom1/lidar_odom1/Queue Size1
+        - /lio_odom1/lidar_odom1/Position Tolerance1
+        - /lio_odom1/lidar_odom1/Angle Tolerance1
+        - /lio_odom1/lidar_odom1/Keep1
+        - /lio_odom1/lidar_odom1/Shape1
+        - /lio_odom1/lidar_odom1/Shape1/Color1
+        - /lio_odom1/lidar_odom1/Shape1/Alpha1
+        - /lio_odom1/lidar_odom1/Shape1/Shaft Length1
+        - /lio_odom1/lidar_odom1/Shape1/Shaft Radius1
+        - /lio_odom1/lidar_odom1/Shape1/Head Length1
+        - /lio_odom1/lidar_odom1/Shape1/Head Radius1
+        - /lio_odom1/lidar_odom1/Shape1/Axes Length1
+        - /lio_odom1/lidar_odom1/Shape1/Axes Radius1
+        - /lio_odom1/lidar_odom1/Covariance1/Position1
+        - /lio_odom1/lidar_odom1/Covariance1/Position1/Color1
+        - /lio_odom1/lidar_odom1/Covariance1/Position1/Alpha1
+        - /lio_odom1/lidar_odom1/Covariance1/Position1/Scale1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1/Frame1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1/Color Style1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1/Color1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1/Alpha1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1/Offset1
+        - /lio_odom1/lidar_odom1/Covariance1/Orientation1/Scale1
+        - /lio_odom1/imu_odom1/Shape1
         - /robo_odom1/Pose1/Topic1
         - /robo_odom1/Pose1/Unreliable1
         - /robo_odom1/Pose1/Queue Size1
@@ -138,7 +135,6 @@ Panels:
         - /robo_odom1/Pose1/Head Radius1
         - /robo_odom1/Pose1/Axes Length1
         - /robo_odom1/Pose1/Axes Radius1
-        - /robo_odom1/Odometry1
         - /robo_odom1/Odometry1/Topic1
         - /robo_odom1/Odometry1/Unreliable1
         - /robo_odom1/Odometry1/Queue Size1
@@ -220,11 +216,11 @@ Visualization Manager:
       Reference Frame: world
       Show Trail: false
       Value: true
-    - Alpha: 0.20000000298023224
+    - Alpha: 0.15000000596046448
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 2.0469298362731934
-        Min Value: -1.2384233474731445
+        Max Value: 33.29008102416992
+        Min Value: -3.284268379211426
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -321,7 +317,7 @@ Visualization Manager:
             Value: true
           Enabled: true
           Keep: 1
-          Name: Odometry
+          Name: lidar_odom
           Position Tolerance: 0
           Queue Size: 10
           Shape:
@@ -337,8 +333,43 @@ Visualization Manager:
           Topic: /lio/odom
           Unreliable: false
           Value: true
+        - Angle Tolerance: 0
+          Class: rviz/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: true
+            Value: true
+          Enabled: false
+          Keep: 1
+          Name: imu_odom
+          Position Tolerance: 0
+          Queue Size: 10
+          Shape:
+            Alpha: 1
+            Axes Length: 0.6000000238418579
+            Axes Radius: 0.10000000149011612
+            Color: 255; 25; 0
+            Head Length: 0.30000001192092896
+            Head Radius: 0.10000000149011612
+            Shaft Length: 1
+            Shaft Radius: 0.05000000074505806
+            Value: Axes
+          Topic: /lio/imu/odom
+          Unreliable: false
+          Value: false
       Enabled: true
-      Name: lidar_odom
+      Name: lio_odom
     - Class: rviz/Group
       Displays:
         - Alpha: 1
@@ -703,7 +734,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/ThirdPersonFollower
-      Distance: 24.051687240600586
+      Distance: 131.35813903808594
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -711,17 +742,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 3.5554285049438477
-        Y: 2.6666603088378906
+        X: 0.763012170791626
+        Y: -3.092193603515625
         Z: -1.52587890625e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.925398051738739
+      Pitch: 0.4553990066051483
       Target Frame: world
-      Yaw: 0.20039840042591095
+      Yaw: 4.5385589599609375
     Saved: ~
 Window Geometry:
   Displays:

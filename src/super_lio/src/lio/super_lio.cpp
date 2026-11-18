@@ -528,6 +528,12 @@ void SuperLIO::Observe(){
     iter_num++;
   });
 
+  // [ALIGN-FastLIVO2] 前向递推重锚定.
+  // EKF 后验 (v_/R_/p_) 已确定, 通知 ESKF 把前向状态重置到后验,
+  // 并在下一条 IMU 到来时用 ~5ms 的细粒度步长逐条重积分.
+  // (对应 FastLIVO2 的 state_update_flg = true)
+  kf_->NotifyForwardAnchor(measures_.lidar.end_time);
+
   frame_num_++;
 }
 

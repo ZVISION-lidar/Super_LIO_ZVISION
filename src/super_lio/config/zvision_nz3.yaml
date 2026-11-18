@@ -16,15 +16,15 @@ lio:
   # Sensor Configuration
   sensor:
     lidar_type: 8
-    blind: 0.3
-    maxrange: 150.0
+    blind: 0.8
+    maxrange: 50.0
     filter_rate: 1
     enable_downsample: true
-    voxel_fliter_size: 0.3
+    voxel_fliter_size: 0.5
     gravity_norm: 9.85
     imu_type: 1
     imu_na: 0.1
-    imu_ng: 0.01
+    imu_ng: 0.1
     imu_nba: 0.001
     imu_nbg: 0.001
 
