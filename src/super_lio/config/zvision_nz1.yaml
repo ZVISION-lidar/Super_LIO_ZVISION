@@ -1,19 +1,19 @@
 lio:
   # Map settings
   map:
-    save_map: false
+    save_map: true
     if_filter: true
     save_map_dir: "map"
     map_name: "map.pcd"
-    ds_size: 0.3
+    ds_size: 0.5
     save_interval: -1
 
   # ROS Topic input
   ros:
-    lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
-    imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
-    # lidar_topic: "/zvlidar_points_xyzirt"
-    # imu_topic: "/zvlidar_imu_msg"
+    # lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
+    # imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
+    lidar_topic: "/zvlidar_points_xyzirt"
+    imu_topic: "/zvlidar_imu_msg"
 
   # Sensor Configuration
   sensor:
@@ -22,7 +22,7 @@ lio:
     maxrange: 60.0
     filter_rate: 1
     enable_downsample: true
-    voxel_fliter_size: 0.5
+    voxel_fliter_size: 0.3
     gravity_norm: 9.81
     imu_type: 1
     imu_na: 0.1
@@ -80,7 +80,7 @@ lio:
     timer: true
 
 
-      # ============================================================
+  # ============================================================
   # [LOOP-CLOSURE] 回环检测 + GTSAM 位姿图优化
   #   enable: false 时行为与原来完全一致 (不启动回环线程).
   #
@@ -90,7 +90,7 @@ lio:
   #   在小场景来回走动时, 如果一直不触发, 优先调小它 (比如 10).
   # ============================================================
   loop_closure:
-    enable: false
+    enable: true
     frequency: 2.0          # 回环检测线程频率 (Hz)
 
     # 关键帧判定阈值 (位移与角度同时满足才建关键帧)
@@ -107,7 +107,7 @@ lio:
     sc_search_ratio: 0.1
     sc_distance_threshold: 0.15
 
-    # ICP 几何验证
+    # ICP 几何验证  
     icp_max_correspondence_distance: 15
     icp_max_iterations: 100
     icp_fitness_score_threshold: 0.6
@@ -124,4 +124,21 @@ lio:
     # 回环后是否把优化位姿回写到前端 ESKF
     writeback_enable: true
     # 退出时是否用关键帧重拼接保存地图 (与优化后位姿完全对齐)
-    keyframe_map_enable: false
+    keyframe_map_enable: true
+
+    # ============================================================
+    # 回环可视化
+    # ============================================================
+    # visual_enable: false 时不发布:
+    #   /lio/loop_map_optimized      (优化后的全局地图, 开销最大)
+    #   /lio/loop_icp_history_cloud  (ICP 历史 submap)
+    #   /lio/loop_icp_corrected_cloud (ICP 修正后的当前帧)
+    #   /lio/loop_icp_raw_cloud       (ICP 修正前的当前帧)
+    # 回环检测与位姿图优化照常工作, CPU 吃紧时关掉.
+    visual_enable: false
+    # "优化后全局地图"的发布间隔 (帧).
+    #   这项要把【所有】关键帧点云变换一遍再降采样, 开销最大,
+    #   所以默认 50 帧一次 (10Hz LiDAR 下约 0.2Hz).
+    #   调大到 200 就是 0.05Hz, 基本看不出卡顿.
+    visual_map_interval: 50
+

@@ -149,6 +149,14 @@ namespace LI2Sup{
   extern bool   g_loop_writeback_enable;
   /// 回环优化后是否用关键帧重拼接地图 (SaveMapByKeyframe)
   extern bool   g_loop_keyframe_map_enable;
+  /// 回环可视化总开关.
+  /// 关闭后不发布任何回环可视化的 topic (轨迹/边/点云/地图),
+  /// 但回环检测与位姿图优化照常工作.
+  /// CPU 吃紧时可以关掉 (ICP 本身的开销不受影响).
+  extern bool   g_loop_visual_enable;
+  /// 回环可视化里"优化后全局地图"的发布间隔 (帧).
+  /// 地图拼接要把所有关键帧点云变换一遍, 开销大, 默认低频发.
+  extern int    g_loop_visual_map_interval;
 
 }
 

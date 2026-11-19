@@ -101,9 +101,21 @@ bool LoopDetector::detect(const KeyframeManager& kfm, LoopConstraint& out) {
   pcl::PointCloud<pcl::PointXYZI> aligned;
   icp.align(aligned);
 
-  if (!icp.hasConverged()) return false;
+  if (!icp.hasConverged()) {
+    // PCL 会往 stderr 打 "Not enough correspondences found" (对应点 < 10),
+    // 常见于大场景下累积漂移导致 source/target 空间错位超过搜索半径.
+    // 这是【无害】的: 候选回环被丢弃, 不会产生任何错误因子.
+    LOG(INFO) << YELLOW << " ---> [LoopDetector]: ICP not converged, drop "
+              << from_index << " -> " << to_index << RESET;
+    return false;
+  }
   const double fitness = icp.getFitnessScore();
-  if (fitness > options_.icp_fitness_score_threshold) return false;
+  if (fitness > options_.icp_fitness_score_threshold) {
+    LOG(INFO) << YELLOW << " ---> [LoopDetector]: fitness too high ("
+              << fitness << " > " << options_.icp_fitness_score_threshold
+              << "), drop " << from_index << " -> " << to_index << RESET;
+    return false;
+  }
 
   // ---- 6. 导出相对位姿约束 ----
   // ICP 的 source/target 都在世界系:
@@ -144,6 +156,7 @@ bool LoopDetector::detect(const KeyframeManager& kfm, LoopConstraint& out) {
   {
     IcpVisualization viz;
     viz.history_cloud = *history_cloud;
+    // aligned 是对象 (不是指针), 直接赋值.
     viz.corrected_cloud = aligned;
     // raw_cloud: 当前帧原始点云 (世界系, 用修正前的位姿变换).
     viz.raw_cloud = *cur_cloud;
@@ -152,6 +165,8 @@ bool LoopDetector::detect(const KeyframeManager& kfm, LoopConstraint& out) {
     viz.fitness_score = fitness;
     viz.valid = true;
     std::lock_guard<std::mutex> lock(mutex_);
+    // 序号 +1: 用于让发布端判断"是不是新回环".
+    viz.seq = ++icp_viz_seq_;
     icp_viz_ = viz;
   }
 

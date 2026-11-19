@@ -88,6 +88,9 @@ public:
     std::size_t to_index = 0;
     double fitness_score = 0.0;
     bool valid = false;
+    /// 检出序号 (每成功检出一次回环 +1).
+    /// 用于判断"是不是新的回环", 从而只在新的回环出现时才发布可视化点云.
+    std::size_t seq = 0;
   };
 
   /// 取最近一次 ICP 匹配的调试点云 (线程安全).
@@ -105,6 +108,8 @@ private:
   std::vector<std::pair<std::size_t, std::size_t>> accepted_loops_;
   /// 最近一次 ICP 匹配的点云 (可视化用).
   IcpVisualization icp_viz_;
+  /// ICP 检出计数 (每成功一次 +1), 用于判断是否是新回环.
+  std::size_t icp_viz_seq_ = 0;
 };
 
 } // namespace LI2Sup

@@ -166,6 +166,9 @@ void LoadParamFromRos(ros::NodeHandle& nh){
 
   nh.getParam("/lio/loop_closure/writeback_enable", g_loop_writeback_enable);
   nh.getParam("/lio/loop_closure/keyframe_map_enable", g_loop_keyframe_map_enable);
+  nh.getParam("/lio/loop_closure/visual_enable", g_loop_visual_enable);
+  nh.getParam("/lio/loop_closure/visual_map_interval", g_loop_visual_map_interval);
+  if (g_loop_visual_map_interval < 1) g_loop_visual_map_interval = 1;
 
   if (g_sc_exclude_recent < 1) g_sc_exclude_recent = 1;
   if (g_sc_num_candidates < 1) g_sc_num_candidates = 1;

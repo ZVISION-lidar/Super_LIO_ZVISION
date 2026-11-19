@@ -176,10 +176,6 @@ bool LoopClosureManager::maybeAddKeyframe(
     ref_graph_pose_ = x_new;
   }
 
-  if (added) {
-    LOG(INFO) << GREEN << " ---> [LoopClosure]: keyframe " << index
-              << " added, total = " << kfm_->size() << RESET;
-  }
   return added;
 }
 

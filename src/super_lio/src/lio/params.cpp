@@ -120,5 +120,7 @@ namespace LI2Sup{
 
   bool   g_loop_writeback_enable = true;
   bool   g_loop_keyframe_map_enable = true;
+  bool   g_loop_visual_enable = true;
+  int    g_loop_visual_map_interval = 50;
 
 }

@@ -263,10 +263,16 @@ void SuperLIO::applyCorrection(const BASIC::SE3& T_corr){
 
   kf_->CorrectPose(BASIC::SO3(new_pose.R_), new_pose.t_, BASIC::SO3(cur_pose.R_));
 
+  // 只有修正量有意义时才打印.
+  // 新建关键帧时位姿图几乎不变, dp 只有 1e-6 量级, 那是浮点噪声,
+  // 每个关键帧都打一遍既刷屏又没有信息量.
+  // 真正有回环拉回时 dp 是 0.1~1m 量级.
+  const BASIC::V3 dp = new_pose.t_ - cur_pose.t_;
+  if(dp.norm() < 1e-3) return;
+
   LOG(INFO) << GREEN << " ---> [SuperLIO]: loop writeback applied, "
-            << "dp = [" << (new_pose.t_ - cur_pose.t_).x() << ", "
-            << (new_pose.t_ - cur_pose.t_).y() << ", "
-            << (new_pose.t_ - cur_pose.t_).z() << "]" << RESET;
+            << "dp = [" << dp.x() << ", " << dp.y() << ", "
+            << dp.z() << "], |dp| = " << dp.norm() << " m" << RESET;
 }
 
 
@@ -300,6 +306,18 @@ void SuperLIO::applyLoopWriteback(){
 // ============================================================
 // [LOOP-CLOSURE] 回环可视化
 //   发布回环边 (LINE_LIST) 和优化后的关键帧轨迹.
+//
+//   分成两类, 用 g_loop_visual_enable 控制:
+//     - 【始终发布】(开销极小, 信息量高):
+//         /lio/loop_closure_constraints  回环节点 + 回环边
+//         /lio/loop_path                 优化后的关键帧轨迹
+//         /lio/loop_path_before          优化前的关键帧轨迹 (对比用)
+//       即使 visual_enable=false 也发, 因为这是判断"回环有没有生效"
+//       最直观的信息, 而开销只有几十个点.
+//
+//     - 【受开关控制】(开销大):
+//         /lio/loop_map_optimized         优化后的全局地图 (要变换所有关键帧)
+//         /lio/loop_icp_*_cloud           ICP 匹配的点云
 // ============================================================
 void SuperLIO::publishLoopVisualization(){
   if(!loop_closure_) return;
@@ -312,6 +330,9 @@ void SuperLIO::publishLoopVisualization(){
   const std::vector<LoopClosureManager::LoopEdge> edges =
       loop_closure_->loopEdges();
 
+  // ============================================================
+  // 始终发布: 回环 marker (节点 + 边) 与优化前/后轨迹
+  // ============================================================
   std::vector<LoopEdgeInfo> ros_edges;
   ros_edges.reserve(edges.size());
   for(const auto& edge : edges){
@@ -319,19 +340,27 @@ void SuperLIO::publishLoopVisualization(){
   }
   data_wrapper_->pub_loop_closure(poses, ros_edges);
 
-  // ---- [可视化] "优化前"的轨迹 (原始 ESKF 位姿) ----
-  //   与上面的"优化后"轨迹叠加, 一眼看出回环把漂移拉回了多少.
+  // "优化前"的轨迹 (原始 ESKF 位姿).
+  // 与上面的"优化后"轨迹叠加, 一眼看出回环把漂移拉回了多少.
   const std::vector<BASIC::SE3> odom_poses =
       loop_closure_->keyframeManager()->getOdomPoses();
   if(!odom_poses.empty()){
     data_wrapper_->pub_loop_path_before(odom_poses);
   }
 
-  // ---- [可视化] ICP 匹配的点云 ----
-  //   只在真的有新回环匹配时才发 (lastIcpVisualization 是最近一次的).
+  // ============================================================
+  // 以下是重负载, 受 g_loop_visual_enable 控制
+  // ============================================================
+  if(!g_loop_visual_enable) return;
+
+  // ---- ICP 匹配的点云 ----
+  //   只在【新回环检出时】才发.
+  //   (之前是 icp_viz.valid 一旦为 true 就每帧重发同样的 3 个点云,
+  //    内容完全没变, 白白占 CPU 和带宽.)
   const LoopDetector::IcpVisualization icp_viz =
       loop_closure_->lastIcpVisualization();
-  if(icp_viz.valid){
+  if(icp_viz.valid && icp_viz.seq != last_icp_viz_seq_){
+    last_icp_viz_seq_ = icp_viz.seq;
     data_wrapper_->pub_loop_icp_clouds(icp_viz.history_cloud,
                                        icp_viz.corrected_cloud,
                                        icp_viz.raw_cloud);
@@ -340,7 +369,7 @@ void SuperLIO::publishLoopVisualization(){
   // ---- [可视化] 优化后的全局地图 (关键帧重拼接) ----
   //   开销大 (要变换所有关键帧点云), 所以低频发.
   //   对应 fastlio_sam 的 map_global_optimized.
-  if(++loop_map_counter_ < 50) return;
+  if(++loop_map_counter_ < g_loop_visual_map_interval) return;
   loop_map_counter_ = 0;
   BASIC::CloudPtr opt_map(new PointCloudType());
   if(loop_closure_->keyframeManager()->getAllWorldCloud(opt_map) &&

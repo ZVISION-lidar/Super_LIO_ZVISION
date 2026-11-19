@@ -94,6 +94,8 @@ protected:
   int loop_vis_counter_ = 0;
   /// [LOOP-CLOSURE] 优化后地图发布节流计数 (拼接开销大, 低频发)
   int loop_map_counter_ = 0;
+  /// [LOOP-CLOSURE] 上次已发布的 ICP 可视化序号 (只在有新回环时重发点云)
+  std::size_t last_icp_viz_seq_ = 0;
 
   std::size_t effect_knn_num_ = 0;
   BASIC::VV3 points_world_v3_, points_body_v3_;
