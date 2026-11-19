@@ -186,6 +186,50 @@ bool KeyframeManager::getAllWorldCloud(
   return !out->empty();
 }
 
+bool KeyframeManager::getAllWorldCloudOdom(
+    pcl::PointCloud<pcl::PointXYZI>::Ptr& out, double max_range) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!out) out.reset(new pcl::PointCloud<pcl::PointXYZI>());
+  out->clear();
+
+  const std::size_t n = std::min(odom_poses_.size(), clouds_.size());
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto& src = clouds_[i];
+    if (!src || src->empty()) continue;
+
+    const Eigen::Matrix4f T = odom_poses_[i].matrix().cast<float>();
+    pcl::PointCloud<pcl::PointXYZI> transformed;
+    pcl::transformPointCloud(*src, transformed, T);
+    *out += transformed;
+  }
+
+  if (max_range > 0.0) {
+    // 裁掉离原点太远的点 (原始轨迹漂移可能很远, 便于观察).
+    pcl::PointCloud<pcl::PointXYZI> filtered;
+    filtered.reserve(out->size());
+    for (const auto& pt : out->points) {
+      if (pt.getVector3fMap().norm() <= max_range) filtered.push_back(pt);
+    }
+    out->swap(filtered);
+  }
+  return !out->empty();
+}
+
+bool KeyframeManager::getOdomWorldCloud(
+    std::size_t index, pcl::PointCloud<pcl::PointXYZI>::Ptr& out) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!out) out.reset(new pcl::PointCloud<pcl::PointXYZI>());
+  out->clear();
+
+  if (index >= clouds_.size() || index >= odom_poses_.size()) return false;
+  const auto& src = clouds_[index];
+  if (!src || src->empty()) return false;
+
+  const Eigen::Matrix4f T = odom_poses_[index].matrix().cast<float>();
+  pcl::transformPointCloud(*src, *out, T);
+  return !out->empty();
+}
+
 ScanContextCandidate KeyframeManager::detectLoopCandidate() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return scan_context_->detectLatest();

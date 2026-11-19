@@ -77,36 +77,68 @@ void ESKF::SetX(const SysState& x) {
 
 // ============================================================
 // [LOOP-CLOSURE] 位姿图优化结果回写
-//   只改位姿/速度, 不动 IMU 时间基准.
+//   只改位姿, 不动 IMU 时间基准, 也不动速度.
 //   见头文件注释: 为什么不能用 SetX().
 //
 //   坐标约定:
 //     R_ : body(imu) -> world 的旋转
 //     p_ : world 系位置
-//     v_ : world 系速度 (ForwardPropagateOnce 里 global_acc 累加的是 world 系)
-// ============================================================
+//
+//   语义与 fastlio_sam 的 change_x() 完全一致:
+//     - 绝对赋值 (不是增量修正), 把优化结果直接当作当前真值
+//     - 只改 pos / rot, 速度保持不变
+//
+//   [BUG FIX] 旋转矩阵的正交性:
+//     BASIC::SO3 内部存的是 float 旋转矩阵, 乘法是纯矩阵乘, 不重正交化.
+//     如果直接把 GTSAM 的 double 结果转成 float 矩阵塞回去,
+//     正交性会逐帧退化 (float 只有 ~7 位有效数字).
+//     一份非正交的 R 喂给 gtsam::Rot3(R) 会得到非单位四元数,
+//     进而让 GTSAM 线性化产生 NaN -> IndeterminantLinearSystemException.
+//
+//     修复: 用四元数做中间载体, 归一化后再转回矩阵.
+//     这样每次回写后 R_ 都是严格正交的.
+//     (fastlio_sam 天然没有这个问题, 因为它的 ESKF 状态本来就存四元数)
 void ESKF::CorrectPose(const SO3& R_new, const V3& p_new, const SO3& R_old)
 {
-  // 修正量是 world 系的左乘修正:  T_new = T_corr * T_old
-  //   => R_corr = R_new * R_old^{-1}
-  // world 系的速度也要跟着这个 world 系旋转一起转:
-  //   v_new = R_corr * v_old
-  // (等价地, body 系的速度保持不变)
-  const M3 R_corr = R_new.R() * R_old.R().transpose();
-  const V3 v_new = R_corr * v_;
+  (void)R_old;  // fastlio_sam 也不用旧姿态, 这里保留只是为了接口兼容/诊断.
 
-  R_ = R_new;
+  // ---- 姿态: 经四元数中转, 保证严格正交 ----
+  //   Quat(R) 从矩阵构造, 再 normalize() 强制单位化.
+  Quat q_new(R_new.R());
+  q_new.normalize();
+  R_ = SO3(q_new.toRotationMatrix());
+
+  // ---- 位置: 直接赋值 ----
   p_ = p_new;
-  v_ = v_new;
 
-  // 前向递推状态同步 (不重置 fw_last_integr_time_, 保持时间连续).
-  fw_R_ = R_new;
-  fw_p_ = p_new;
-  fw_v_ = v_new;
+  // ---- 速度: 不动 (与 fastlio_sam 的 change_x() 一致) ----
+  //   注意: 不能用 R_corr * v_ 的写法. 速度在 body 系里数值不变,
+  //   而世界系速度要跟着世界系旋转一起转, 两者不等价;
+  //   fastlio_sam 选择不动速度, 这里跟随它.
+
+  // ---- 前向递推状态同步 (不重置 fw_last_integr_time_, 保持时间连续) ----
+  fw_R_ = R_;
+  fw_p_ = p_;
+  fw_v_ = v_;
 
   // 协方差不变: 优化只修正均值, 不改变不确定度.
+  // (fastlio_sam 也明确注释说改 P 会跑飞, 所以不碰.)
 }
 
+
+// ============================================================
+// [BUG FIX] 重正交化 (见头文件 NormalizeRotation() 的说明)
+// ============================================================
+void ESKF::NormalizeRotation()
+{
+  Quat q(R_.R());
+  q.normalize();
+  R_ = SO3(q.toRotationMatrix());
+
+  Quat q_fw(fw_R_.R());
+  q_fw.normalize();
+  fw_R_ = SO3(q_fw.toRotationMatrix());
+}
 
 void ESKF::BuildNoise(const Options& options) {
   double et = options.gyro_var_;
@@ -128,6 +160,15 @@ void ESKF::BuildNoise(const Options& options) {
 
 void ESKF::Update() {
   R_ = R_ * SO3::Exp(dx_.template block<3, 1>(0, 0));
+  // [BUG FIX] 重正交化.
+  //   BASIC::SO3 存的是 float 旋转矩阵, 矩阵乘会逐帧损失正交性.
+  //   一旦 R_ 不再严格正交:
+  //     - 前端的 world->body 变换会有微小畸变;
+  //     - 更要命的是把它喂给 gtsam::Rot3(R) 会得到非单位四元数,
+  //       GTSAM 线性化随之产生 NaN -> IndeterminantLinearSystemException.
+  //   fastlio_sam 天然没有这个问题 (它的 ESKF 状态存四元数).
+  //   这里用四元数中转做一次重正交化, 代价可以忽略.
+  NormalizeRotation();
   p_ += dx_.template block<3, 1>(3, 0);
   v_ += dx_.template block<3, 1>(6, 0);
 

@@ -92,9 +92,13 @@ public:
   ///   - fw_R_ / fw_p_ / fw_v_ : 前向递推状态 (同步, 避免前向预测跳变)
   ///   - 不动 last_imu_time_ / current_time_ / last_obs_time_ / fw_last_integr_time_
   ///
+  /// 语义与 fastlio_sam 一致: 绝对赋值 (把优化结果直接作为当前真值).
+  /// fastlio_sam 的 change_x() 只改 pos/rot, 不动 vel;
+  /// 这里同样只改 pos/rot, 速度保持不变 (改速度会引入额外的世界系旋转耦合).
+  ///
   /// @param R_new 优化后的姿态 (body -> world)
   /// @param p_new 优化后的位置 (world 系)
-  /// @param R_old 优化前的姿态 (body -> world), 用来求 world 系的旋转修正量
+  /// @param R_old 优化前的姿态 (body -> world), 保留用于诊断
   void CorrectPose(const BASIC::SO3& R_new, const BASIC::V3& p_new,
                    const BASIC::SO3& R_old);
 
@@ -123,6 +127,22 @@ public:
 private:
   void BuildNoise(const Options& options);
   void Update();
+
+  /// [BUG FIX] 把 R_ / fw_R_ 重正交化.
+  ///
+  /// 背景: BASIC::SO3 内部存的是 float 旋转矩阵, 而矩阵乘
+  ///       (SO3::operator*) 不做正交化. 长时间累积 (尤其是回环回写
+  ///       每帧都会改写 R_) 会让 R_ 逐渐失去正交性.
+  ///
+  /// 后果: 一份非正交的 R 传给 gtsam::Rot3(R) 时, Eigen 的
+  ///       "矩阵 -> 四元数" 构造假设输入正交, 得到的四元数不是单位的.
+  ///       GTSAM 的 Logmap/Expmap 于是产生 NaN, 最终抛出
+  ///       IndeterminantLinearSystemException.
+  ///
+  /// 对齐 fastlio_sam: 它的 ESKF 状态本来就存四元数, 天生不会漂.
+  ///
+  /// 做法: 经四元数中转, 归一化后再转回矩阵.
+  void NormalizeRotation();
 
   /// [ALIGN-FastLIVO2] 前向递推的单步积分 (半隐式, 与 prop_imu_once 同构).
   /// dt  : 本步的时间长度

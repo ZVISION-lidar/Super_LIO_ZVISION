@@ -88,6 +88,12 @@ bool LoopClosureManager::maybeAddKeyframe(
     std::lock_guard<std::mutex> lock(mutex_);
 
     // 关键帧判定与插入必须在同一把锁内, 否则后台线程可能读到不一致的索引.
+    //
+    // 判定基准与里程计因子必须【保持一致】, 这是自洽性要求:
+    //   writeback=true  -> 用图内估计值 (ESKF 已被钉在图上, 两者同源)
+    //   writeback=false -> 用原始位姿   (前端保持纯里程计, 图是独立的链)
+    //   两端混用会让图内链条与判定基准脱节.
+    // (fastlio_sam 只有一条路径, 因为它永远都把 ESKF 钉在图上.)
     if (!kfm_->shouldCreateKeyframe(pose, g_loop_writeback_enable)) return false;
 
     index = kfm_->addKeyframe(pose, cloud);
@@ -100,23 +106,39 @@ bool LoopClosureManager::maybeAddKeyframe(
     } else {
       // 里程计因子: z = between(x_{k-1}, x_k) = T_{k-1}^{-1} * T_k.
       //
-      // 开启回写时: T_{k-1} 用节点 k-1 的【图内估计值 X_{k-1}】,
-      //              T_k 用当前 ESKF 位姿 P_k.
-      //              因为 ESKF 在关键帧 k-1 处已被钉到 X_{k-1},
-      //              所以 z 恰好是那段纯里程计运动, 不含回环修正.
-      // 关闭回写时: 两端都用【原始位姿】, 保证图内是纯里程计链.
+      // T_prev 的取法必须与上面的判定基准保持一致:
+      //
+      //   writeback=true:
+      //     用【图内估计值】(节点 k-1 的当前优化结果).
+      //     fastlio_sam 用的就是 cloudKeyPoses6D->back(), 也就是优化后的
+      //     上一关键帧位姿, 语义完全一致:
+      //         z = X_{k-1}^{opt} .between( P_k )
+      //     此时 P_k 是当前 ESKF 位姿 (已被钉在图上), 所以 z 恰好是那段
+      //     纯里程计运动, 不含回环修正.
+      //
+      //     【不能用】"关键帧建立时固定的原始位姿": 回环把节点 k-1 拉变形后,
+      //     那个固定值就过期了, 会让图内节点 k 偏离前端,
+      //     下一关键帧的修正量会变成 X'_{k-1} * X_{k-1}^{old}^{-1},
+      //     等于把回环形变【施加第二遍】 —— 这正是"轨迹飞"的成因.
+      //
+      //   writeback=false:
+      //     两端都用【原始位姿】, 保证图内是纯里程计链.
       BASIC::SE3 T_prev;
       if (g_loop_writeback_enable) {
         if (!backend_->getEstimate(index - 1, T_prev)) {
-          const std::vector<BASIC::SE3> graph_poses = kfm_->getPoses();
-          if (index - 1 >= graph_poses.size()) return true;
-          T_prev = graph_poses[index - 1];
+          // 图内还没有该节点的估计 (第一次优化前), 退回关键帧的原始位姿.
+          const std::vector<BASIC::SE3> odom_poses = kfm_->getOdomPoses();
+          T_prev = (index - 1 < odom_poses.size()) ? odom_poses[index - 1]
+                                                    : BASIC::SE3();
         }
       } else {
         const std::vector<BASIC::SE3> odom_poses = kfm_->getOdomPoses();
-        if (index - 1 >= odom_poses.size()) return true;
-        T_prev = odom_poses[index - 1];
+        T_prev = (index - 1 < odom_poses.size()) ? odom_poses[index - 1]
+                                                  : BASIC::SE3();
       }
+      // 注意: 这里【不能】提前 return —— 否则节点 index 会成为一个
+      // 没有任何因子连接的孤立变量, GTSAM 求解线性系统时必然抛出
+      // IndeterminantLinearSystemException.
       backend_->addOdomFactor(index, T_prev, pose);
     }
 
@@ -175,11 +197,11 @@ bool LoopClosureManager::runOnce() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     // 同一个"当前关键帧"不重复建立回环边.
+    // (fastlio_sam 用 loopIndexContainer 做同样的去重.)
     if (std::find(looped_from_.begin(), looped_from_.end(),
                   constraint.from_index) != looped_from_.end()) {
       return false;
     }
-    looped_from_.push_back(constraint.from_index);
     pending_constraints_.push_back(constraint);
   }
 
@@ -232,10 +254,44 @@ bool LoopClosureManager::processLoops(BASIC::SE3& out_corr) {
     if (used == 0) return false;
 
     // ---- 优化 ----
-    if (!backend_->optimize(optimized)) return false;
+    if (!backend_->optimize(optimized)) {
+      // 优化失败 (GTSAM 抛异常或未收敛).
+      //
+      // 【不能】把约束重新入队重试:
+      //   GTSAM 的 update() 是【先】把因子推进 nonlinearFactors_,
+      //   【后】才做消元求解. 所以失败时这些回环因子其实已经进了图.
+      //   如果重新入队再 addLoopFactor() 一次, 同一对节点之间就会有两份
+      //   相同的 BetweenFactor -> 约束权重翻倍, 结果更糟.
+      //
+      // 所以这里的处理是: 放弃本批回环约束, 但保留图和关键帧,
+      // 继续跑后面的关键帧 (fastlio_sam 在这里会直接崩, 我们更保守).
+      // 回环的去重表照常登记, 避免同一帧被反复检测.
+      for (const LoopConstraint& constraint : constraints) {
+        if (!constraint.valid) continue;
+        if (std::find(looped_from_.begin(), looped_from_.end(),
+                      constraint.from_index) == looped_from_.end()) {
+          looped_from_.push_back(constraint.from_index);
+        }
+      }
+      LOG(WARNING) << YELLOW << " ---> [LoopClosure]: optimization failed, "
+                   << "this batch of loops is dropped." << RESET;
+      return false;
+    }
 
     // ---- 回写关键帧位姿 (图内估计值) ----
     kfm_->updatePoses(optimized);
+
+    // ---- 优化成功后才登记 looped_from_ (去重表) ----
+    //   之前是在 runOnce() 里就登记的, 一旦后续优化失败, 这条回环就
+    //   永远不会被重试 (而且约束已经出队, 彻底丢失).
+    //   现在: 只在优化成功后才确认去重登记.
+    for (const LoopConstraint& constraint : constraints) {
+      if (!constraint.valid) continue;
+      if (std::find(looped_from_.begin(), looped_from_.end(),
+                    constraint.from_index) == looped_from_.end()) {
+        looped_from_.push_back(constraint.from_index);
+      }
+    }
   }
 
   // ---- 生成回写修正量 (见 maybeAddKeyframe 里的推导) ----
@@ -248,7 +304,7 @@ bool LoopClosureManager::processLoops(BASIC::SE3& out_corr) {
 
   LOG(INFO) << GREEN << " ---> [LoopClosure]: optimization done, loop count = "
             << loop_count_ << ", residual = " << backend_->currentResidual()
-            << RESET;
+            << ", nodes = " << backend_->nodeCount() << RESET;
   return true;
 }
 

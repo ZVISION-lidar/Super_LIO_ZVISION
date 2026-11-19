@@ -129,7 +129,31 @@ bool LoopDetector::detect(const KeyframeManager& kfm, LoopConstraint& out) {
   out.fitness_score = fitness;
   out.yaw_difference_rad = candidate.yaw_difference_rad;
 
-  accepted_loops_.emplace_back(from_index, to_index);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    accepted_loops_.emplace_back(from_index, to_index);
+  }
+
+  // ---- 7. 保存可视化用的点云 ----
+  //   history_cloud  : ICP 的 target (历史 submap), 世界系
+  //   corrected_cloud: 当前帧经 ICP 修正后的点云, 世界系
+  //   raw_cloud      : 当前帧修正前的点云, 世界系
+  // 对应 fastlio_sam 的:
+  //   fast_lio_sam/mapping/icp_loop_closure_history_cloud
+  //   fast_lio_sam/mapping/icp_loop_closure_corrected_cloud
+  {
+    IcpVisualization viz;
+    viz.history_cloud = *history_cloud;
+    viz.corrected_cloud = aligned;
+    // raw_cloud: 当前帧原始点云 (世界系, 用修正前的位姿变换).
+    viz.raw_cloud = *cur_cloud;
+    viz.from_index = from_index;
+    viz.to_index = to_index;
+    viz.fitness_score = fitness;
+    viz.valid = true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    icp_viz_ = viz;
+  }
 
   return true;
 }

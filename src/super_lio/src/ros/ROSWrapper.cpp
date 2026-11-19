@@ -277,10 +277,21 @@ ROSWrapper::ROSWrapper(){
   pub_path_robot_ = nh_.advertise<sensor_msgs::PointCloud2>("/lio/path_robot", 1);
 
   /// [LOOP-CLOSURE] 回环可视化
-  pub_loop_edges_ = nh_.advertise<visualization_msgs::Marker>("/lio/loop_edges", 1);
-  pub_loop_nodes_ = nh_.advertise<visualization_msgs::Marker>("/lio/loop_nodes", 1);
+  pub_loop_markers_ = nh_.advertise<visualization_msgs::MarkerArray>("/lio/loop_closure_constraints", 1);
   pub_loop_path_  = nh_.advertise<nav_msgs::Path>("/lio/loop_path", 1);
-  
+
+  /// [LOOP-CLOSURE] 优化前/后对比可视化
+  //   loop_path_before : 原始 ESKF 位姿 (优化前) —— 漂移的轨迹
+  //   loop_path        : ISAM2 优化后位姿 —— 拉回后的轨迹
+  //   两个叠加显示, 一眼就能看出回环的效果.
+  pub_loop_path_before_ = nh_.advertise<nav_msgs::Path>("/lio/loop_path_before", 1);
+  //   优化后的全局地图 (关键帧重拼接)
+  pub_loop_map_optimized_ = nh_.advertise<sensor_msgs::PointCloud2>("/lio/loop_map_optimized", 1);
+  //   ICP 匹配的历史 submap / 修正后的当前帧点云
+  pub_loop_icp_history_   = nh_.advertise<sensor_msgs::PointCloud2>("/lio/loop_icp_history_cloud", 1);
+  pub_loop_icp_corrected_ = nh_.advertise<sensor_msgs::PointCloud2>("/lio/loop_icp_corrected_cloud", 1);
+  pub_loop_icp_raw_       = nh_.advertise<sensor_msgs::PointCloud2>("/lio/loop_icp_raw_cloud", 1);
+
   msg_path_point_.header.frame_id = "world";
   msg2uav_.header.frame_id = "world";
   path_.header.frame_id = "world";
@@ -839,8 +850,13 @@ void ROSWrapper::pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
   }
 
   if(!marker_edge.points.empty()){
-    pub_loop_edges_.publish(marker_edge);
-    pub_loop_nodes_.publish(marker_node);
+    // 发 MarkerArray (节点 + 边), 与 fastlio_sam 的
+    // /fast_lio_sam/mapping/loop_closure_constraints 一致:
+    //   一个 topic 里装两个 marker, RViz 用 MarkerArray 显示类订阅.
+    visualization_msgs::MarkerArray marker_array;
+    marker_array.markers.push_back(marker_node);
+    marker_array.markers.push_back(marker_edge);
+    pub_loop_markers_.publish(marker_array);
   }
 
   // ---- 优化后的关键帧轨迹 ----
@@ -863,6 +879,93 @@ void ROSWrapper::pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
     loop_path.poses.push_back(ps);
   }
   pub_loop_path_.publish(loop_path);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布"优化前"的关键帧轨迹 (原始 ESKF 位姿)
+//   与 pub_loop_closure() 发的"优化后"轨迹叠在一起, 就能直接看出
+//   回环优化把漂移的轨迹拉回了多少.
+// ============================================================
+void ROSWrapper::pub_loop_path_before(const std::vector<BASIC::SE3>& odom_poses){
+  if(odom_poses.empty()) return;
+
+  nav_msgs::Path path_before;
+  path_before.header.frame_id = "world";
+  path_before.header.stamp = ros::Time::now();
+  path_before.poses.reserve(odom_poses.size());
+  for(const auto& pose : odom_poses){
+    geometry_msgs::PoseStamped ps;
+    ps.header = path_before.header;
+    ps.pose.position.x = pose.t_.x();
+    ps.pose.position.y = pose.t_.y();
+    ps.pose.position.z = pose.t_.z();
+    const V4 q = BASIC::SO3(pose.R_).coeffs();
+    ps.pose.orientation.x = q[0];
+    ps.pose.orientation.y = q[1];
+    ps.pose.orientation.z = q[2];
+    ps.pose.orientation.w = q[3];
+    path_before.poses.push_back(ps);
+  }
+  pub_loop_path_before_.publish(path_before);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布优化后的全局地图 (关键帧重拼接)
+//   对应 fastlio_sam 的 fast_lio_sam/mapping/map_global_optimized
+// ============================================================
+void ROSWrapper::pub_loop_map_optimized(const BASIC::CloudPtr& cloud){
+  if(!cloud || cloud->empty()) return;
+
+  sensor_msgs::PointCloud2 msg;
+  pcl::toROSMsg(*cloud, msg);
+  msg.header.frame_id = "world";
+  msg.header.stamp = ros::Time::now();
+  pub_loop_map_optimized_.publish(msg);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布 ICP 匹配的点云
+//   history_cloud  : 历史 submap (世界系)
+//   corrected_cloud: 当前帧经 ICP 修正后的点云 (世界系)
+//   raw_cloud      : 当前帧修正前的点云 (世界系)
+// 对应 fastlio_sam 的:
+//   fast_lio_sam/mapping/icp_loop_closure_history_cloud
+//   fast_lio_sam/mapping/icp_loop_closure_corrected_cloud
+// ============================================================
+void ROSWrapper::pub_loop_icp_clouds(
+    const pcl::PointCloud<pcl::PointXYZI>& history_cloud,
+    const pcl::PointCloud<pcl::PointXYZI>& corrected_cloud,
+    const pcl::PointCloud<pcl::PointXYZI>& raw_cloud){
+  const ros::Time stamp = ros::Time::now();
+
+  if(!history_cloud.empty()){
+    sensor_msgs::PointCloud2 msg;
+    pcl::toROSMsg(history_cloud, msg);
+    msg.header.frame_id = "world";
+    msg.header.stamp = stamp;
+    pub_loop_icp_history_.publish(msg);
+  }
+
+  if(!corrected_cloud.empty()){
+    sensor_msgs::PointCloud2 msg;
+    pcl::toROSMsg(corrected_cloud, msg);
+    msg.header.frame_id = "world";
+    msg.header.stamp = stamp;
+    pub_loop_icp_corrected_.publish(msg);
+  }
+
+  // raw_cloud (修正前) 发到独立 topic.
+  // 这样在 RViz 里把 corrected + raw 都加上, 直接看到 ICP 把当前帧搬了多远.
+  if(!raw_cloud.empty()){
+    sensor_msgs::PointCloud2 msg;
+    pcl::toROSMsg(raw_cloud, msg);
+    msg.header.frame_id = "world";
+    msg.header.stamp = stamp;
+    pub_loop_icp_raw_.publish(msg);
+  }
 }
 
 

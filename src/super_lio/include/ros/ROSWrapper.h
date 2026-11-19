@@ -121,6 +121,26 @@ public:
   /// [LOOP-CLOSURE] 发布回环边与优化后的关键帧轨迹.
   void pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
                         const std::vector<LoopEdgeInfo>& edges);
+
+  /// [LOOP-CLOSURE] 发布"优化前"的关键帧轨迹 (原始 ESKF 位姿).
+  ///
+  /// 与 pub_loop_closure() 发的"优化后"轨迹对比, 就能直观看出
+  /// 回环优化把轨迹拉回了多少.
+  /// 对应 fastlio_sam 的 /path (原始) vs fast_lio_sam/path_update (优化后).
+  void pub_loop_path_before(const std::vector<BASIC::SE3>& odom_poses);
+
+  /// [LOOP-CLOSURE] 发布优化后的全局地图 (关键帧重拼接).
+  /// 对应 fastlio_sam 的 fast_lio_sam/mapping/map_global_optimized.
+  void pub_loop_map_optimized(const BASIC::CloudPtr& cloud);
+
+  /// [LOOP-CLOSURE] 发布 ICP 匹配的点云 (历史 submap + 修正后当前帧).
+  /// 对应 fastlio_sam 的:
+  ///   fast_lio_sam/mapping/icp_loop_closure_history_cloud
+  ///   fast_lio_sam/mapping/icp_loop_closure_corrected_cloud
+  void pub_loop_icp_clouds(const pcl::PointCloud<pcl::PointXYZI>& history_cloud,
+                           const pcl::PointCloud<pcl::PointXYZI>& corrected_cloud,
+                           const pcl::PointCloud<pcl::PointXYZI>& raw_cloud);
+
   void pub_cloud2planner(const BASIC::CloudPtr& pc, double time);
   void pub_cloud_body_pose(const BASIC::CloudPtr& pc, 
                            const NavState& state);
@@ -296,9 +316,20 @@ private:
   ros::Publisher pub_path_;        // robo path
   ros::Publisher pub_path_robot_;
   /// [LOOP-CLOSURE] 回环可视化
-  ros::Publisher pub_loop_edges_;   // LINE_LIST
-  ros::Publisher pub_loop_nodes_;   // SPHERE_LIST
+  /// MarkerArray (含 loop_nodes + loop_edges 两个 marker),
+  /// 对应 fastlio_sam 的 loop_closure_constraints.
+  ros::Publisher pub_loop_markers_;
   ros::Publisher pub_loop_path_;    // 优化后的关键帧轨迹
+  /// [LOOP-CLOSURE] 优化前的关键帧轨迹 (原始 ESKF 位姿) —— 用于对比
+  ros::Publisher pub_loop_path_before_;
+  /// [LOOP-CLOSURE] 优化后的全局地图 (关键帧重拼接)
+  ros::Publisher pub_loop_map_optimized_;
+  /// [LOOP-CLOSURE] ICP 匹配的历史 submap
+  ros::Publisher pub_loop_icp_history_;
+  /// [LOOP-CLOSURE] ICP 修正后的当前关键帧点云
+  ros::Publisher pub_loop_icp_corrected_;
+  /// [LOOP-CLOSURE] ICP 修正【前】的当前关键帧点云 (与上面对比看 ICP 位移)
+  ros::Publisher pub_loop_icp_raw_;
 
   nav_msgs::Path path_;
   sensor_msgs::PointCloud2 msg_path_point_;

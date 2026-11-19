@@ -92,6 +92,8 @@ protected:
   LoopClosureManager::Ptr loop_closure_;
   /// [LOOP-CLOSURE] 可视化发布节流计数
   int loop_vis_counter_ = 0;
+  /// [LOOP-CLOSURE] 优化后地图发布节流计数 (拼接开销大, 低频发)
+  int loop_map_counter_ = 0;
 
   std::size_t effect_knn_num_ = 0;
   BASIC::VV3 points_world_v3_, points_body_v3_;

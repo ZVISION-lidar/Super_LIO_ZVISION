@@ -131,6 +131,13 @@ public:
   /// 已接受的回环边 (只含索引对), 便于外部快速遍历.
   std::vector<std::pair<std::size_t, std::size_t>> loopPairs() const;
 
+  /// [可视化] 最近一次 ICP 匹配的点云 (历史 submap + 修正前后当前帧).
+  /// 对应 fastlio_sam 的 icp_loop_closure_history_cloud /
+  /// icp_loop_closure_corrected_cloud.
+  LoopDetector::IcpVisualization lastIcpVisualization() const {
+    return detector_.lastIcpVisualization();
+  }
+
   /// 累计回环次数.
   std::size_t loopCount() const;
 

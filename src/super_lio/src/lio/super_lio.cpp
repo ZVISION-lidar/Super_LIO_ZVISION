@@ -273,13 +273,26 @@ void SuperLIO::applyCorrection(const BASIC::SE3& T_corr){
 // ============================================================
 // [LOOP-CLOSURE] 消费回环约束 -> 位姿图优化 -> 回写 ESKF
 //   必须在主线程做 (与 EKF 更新串行), 保证帧一致性.
+//
+//   [BUG FIX] 这里【不能】用 g_loop_writeback_enable 提前返回.
+//     之前写成:
+//         if(!loop_closure_ || !g_loop_writeback_enable) return;
+//     结果 writeback_enable=false 时 processLoops() 一次都没被调用,
+//     addLoopFactor() 一次都没执行 —— 回环约束全部烂在队列里,
+//     位姿图里从来就没有过回环因子.
+//     (fastlio_sam 没有这个开关: 回环因子必然入图, 回写也必然执行.)
+//
+//     现在: 位姿图优化【始终】进行 (回环约束必然入图),
+//           只有"把结果写回 ESKF"这一步由 writeback_enable 控制.
+//     这样 writeback_enable=false 就真正变成了"只优化不回写"的对照实验.
 // ============================================================
 void SuperLIO::applyLoopWriteback(){
-  if(!loop_closure_ || !g_loop_writeback_enable) return;
+  if(!loop_closure_) return;
 
   BASIC::SE3 T_corr;
   if(!loop_closure_->processLoops(T_corr)) return;
 
+  // 回写是独立开关: 位姿图照常优化, 只是不一定改 ESKF.
   applyCorrection(T_corr);
 }
 
@@ -305,6 +318,45 @@ void SuperLIO::publishLoopVisualization(){
     ros_edges.push_back({edge.from_index, edge.to_index, edge.fitness_score});
   }
   data_wrapper_->pub_loop_closure(poses, ros_edges);
+
+  // ---- [可视化] "优化前"的轨迹 (原始 ESKF 位姿) ----
+  //   与上面的"优化后"轨迹叠加, 一眼看出回环把漂移拉回了多少.
+  const std::vector<BASIC::SE3> odom_poses =
+      loop_closure_->keyframeManager()->getOdomPoses();
+  if(!odom_poses.empty()){
+    data_wrapper_->pub_loop_path_before(odom_poses);
+  }
+
+  // ---- [可视化] ICP 匹配的点云 ----
+  //   只在真的有新回环匹配时才发 (lastIcpVisualization 是最近一次的).
+  const LoopDetector::IcpVisualization icp_viz =
+      loop_closure_->lastIcpVisualization();
+  if(icp_viz.valid){
+    data_wrapper_->pub_loop_icp_clouds(icp_viz.history_cloud,
+                                       icp_viz.corrected_cloud,
+                                       icp_viz.raw_cloud);
+  }
+
+  // ---- [可视化] 优化后的全局地图 (关键帧重拼接) ----
+  //   开销大 (要变换所有关键帧点云), 所以低频发.
+  //   对应 fastlio_sam 的 map_global_optimized.
+  if(++loop_map_counter_ < 50) return;
+  loop_map_counter_ = 0;
+  BASIC::CloudPtr opt_map(new PointCloudType());
+  if(loop_closure_->keyframeManager()->getAllWorldCloud(opt_map) &&
+     !opt_map->empty()){
+    // 降采样一下再发, 否则 RViz 会卡.
+    if(g_if_filter){
+      PointCloudType filtered;
+      pcl::VoxelGrid<PointType> voxel_filter;
+      voxel_filter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
+      voxel_filter.setInputCloud(opt_map);
+      voxel_filter.filter(filtered);
+      opt_map.reset(new PointCloudType());
+      *opt_map = filtered;
+    }
+    data_wrapper_->pub_loop_map_optimized(opt_map);
+  }
 }
 
 

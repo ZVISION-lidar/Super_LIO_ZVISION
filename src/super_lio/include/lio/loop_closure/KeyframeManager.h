@@ -117,6 +117,24 @@ public:
   /// 取所有关键帧拼成的世界系点云 (用位姿图估计值, 不降采样).
   bool getAllWorldCloud(pcl::PointCloud<pcl::PointXYZI>::Ptr& out) const;
 
+  /// 取所有关键帧拼成的世界系点云, 但用【原始 ESKF 位姿】变换.
+  ///
+  /// [用途] 可视化"优化前"的地图, 与 getAllWorldCloud() 的"优化后"地图
+  ///       对比, 就能直观看出回环优化把轨迹/地图拉回了多少.
+  ///       (对应 fastlio_sam 的 /lio/cloud_world 未优化版 vs
+  ///        fast_lio_sam/mapping/map_global_optimized)
+  ///
+  /// @param out       输出 (世界系)
+  /// @param max_range 只保留离原点该距离内的点 (0 = 不限制).
+  ///                   原始轨迹漂移可能很远, 限制一下便于观察.
+  bool getAllWorldCloudOdom(pcl::PointCloud<pcl::PointXYZI>::Ptr& out,
+                             double max_range = 0.0) const;
+
+  /// 取单个关键帧的世界系点云 (用【原始 ESKF 位姿】变换).
+  /// 用于可视化"优化前"的当前帧位置.
+  bool getOdomWorldCloud(std::size_t index,
+                         pcl::PointCloud<pcl::PointXYZI>::Ptr& out) const;
+
   /// 拷贝出某个关键帧 (及邻域) 的原始点云与位姿.
   /// 锁内只做内存拷贝, 后续的变换/降采样/ICP 在锁外做.
   bool snapshotClouds(std::size_t index, int search_num,

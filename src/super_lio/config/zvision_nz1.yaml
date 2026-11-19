@@ -22,7 +22,7 @@ lio:
     maxrange: 60.0
     filter_rate: 1
     enable_downsample: true
-    voxel_fliter_size: 0.3
+    voxel_fliter_size: 0.5
     gravity_norm: 9.81
     imu_type: 1
     imu_na: 0.1
@@ -59,7 +59,7 @@ lio:
   kf:
     kf_type: 0
     kf_max_iterations: 5
-    kf_align_gravity: false
+    kf_align_gravity: true
     kf_quit_eps: 0.001
 
   # output
@@ -90,7 +90,7 @@ lio:
   #   在小场景来回走动时, 如果一直不触发, 优先调小它 (比如 10).
   # ============================================================
   loop_closure:
-    enable: true
+    enable: false
     frequency: 2.0          # 回环检测线程频率 (Hz)
 
     # 关键帧判定阈值 (位移与角度同时满足才建关键帧)
@@ -122,6 +122,6 @@ lio:
     pg_prior_trans_sigma: 0.000001
 
     # 回环后是否把优化位姿回写到前端 ESKF
-    writeback_enable: false
+    writeback_enable: true
     # 退出时是否用关键帧重拼接保存地图 (与优化后位姿完全对齐)
     keyframe_map_enable: false

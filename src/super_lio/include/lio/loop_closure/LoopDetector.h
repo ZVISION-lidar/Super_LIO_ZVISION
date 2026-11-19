@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -67,9 +68,43 @@ public:
     return accepted_loops_;
   }
 
+  /// [可视化] 最近一次 ICP 匹配的点云 (世界系).
+  ///
+  /// 对应 fastlio_sam 的两个 topic:
+  ///   fast_lio_sam/mapping/icp_loop_closure_history_cloud   <- history_cloud
+  ///   fast_lio_sam/mapping/icp_loop_closure_corrected_cloud <- cur_cloud 变换后
+  ///
+  /// 用途: 在 RViz 里直观看到"当前帧被 ICP 拉到了历史帧的位置",
+  ///       以及匹配用的历史 submap.
+  struct IcpVisualization {
+    /// 历史 submap (世界系, 降采样后).
+    pcl::PointCloud<pcl::PointXYZI> history_cloud;
+    /// 当前关键帧经 ICP 修正后的点云 (世界系, 降采样后).
+    pcl::PointCloud<pcl::PointXYZI> corrected_cloud;
+    /// 当前关键帧经 ICP 修正前的点云 (世界系, 降采样后).
+    pcl::PointCloud<pcl::PointXYZI> raw_cloud;
+    /// 本次匹配的索引对.
+    std::size_t from_index = 0;
+    std::size_t to_index = 0;
+    double fitness_score = 0.0;
+    bool valid = false;
+  };
+
+  /// 取最近一次 ICP 匹配的调试点云 (线程安全).
+  ///
+  /// 注意: detect() 在后台线程里写, 这里在主线程读, 必须加锁.
+  IcpVisualization lastIcpVisualization() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return icp_viz_;
+  }
+
 private:
+  /// 可视化数据的锁 (后台线程写, 主线程读).
+  mutable std::mutex mutex_;
   Options options_;
   std::vector<std::pair<std::size_t, std::size_t>> accepted_loops_;
+  /// 最近一次 ICP 匹配的点云 (可视化用).
+  IcpVisualization icp_viz_;
 };
 
 } // namespace LI2Sup
