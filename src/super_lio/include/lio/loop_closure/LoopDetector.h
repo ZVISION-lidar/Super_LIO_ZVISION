@@ -46,8 +46,10 @@ public:
     /// ICP 收敛阈值
     double icp_transformation_epsilon = 1e-6;
     double icp_euclidean_fitness_epsilon = 1e-6;
-    /// ICP fitness score 阈值 (越小越严格)
-    double icp_fitness_score_threshold = 0.6;
+    /// ICP fitness score 阈值 (越小越严格).
+    /// 注意: PCL 的 fitness score 是【平方距离的均值】, 单位 m^2.
+    ///   0.3 -> 实际 RMS 对齐误差 0.55m (与 fastlio_sam_sc 一致).
+    double icp_fitness_score_threshold = 0.3;
     /// 历史 submap 前后各取几个关键帧
     int history_search_num = 5;
   };

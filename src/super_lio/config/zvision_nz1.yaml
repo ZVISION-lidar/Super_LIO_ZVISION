@@ -5,15 +5,15 @@ lio:
     if_filter: true
     save_map_dir: "map"
     map_name: "map.pcd"
-    ds_size: 0.5
+    ds_size: 0.3
     save_interval: -1
 
   # ROS Topic input
   ros:
-    # lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
-    # imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
-    lidar_topic: "/zvlidar_points_xyzirt"
-    imu_topic: "/zvlidar_imu_msg"
+    lidar_topic: "/zvlidar_sdk/zvlidar_points_xyzirt"
+    imu_topic: "/zvlidar_sdk/zvlidar_imu_msg"
+    # lidar_topic: "/zvlidar_points_xyzirt"
+    # imu_topic: "/zvlidar_imu_msg"
 
   # Sensor Configuration
   sensor:
@@ -83,8 +83,6 @@ lio:
   # ============================================================
   # [LOOP-CLOSURE] 回环检测 + GTSAM 位姿图优化
   #   enable: false 时行为与原来完全一致 (不启动回环线程).
-  #
-  #   注意: exclude_recent 决定了"走多远才可能触发回环".
   #   关键帧间距 ~1m, exclude_recent=30 => 至少要走出 30m
   #   才会拿当前帧去和 30 帧之前的关键帧比较.
   #   在小场景来回走动时, 如果一直不触发, 优先调小它 (比如 10).
@@ -125,6 +123,16 @@ lio:
     writeback_enable: true
     # 退出时是否用关键帧重拼接保存地图 (与优化后位姿完全对齐)
     keyframe_map_enable: true
+
+
+    # ============================================================
+    # [DIAG] 位姿图残差诊断
+    # ============================================================
+    # 只在【含回环】的优化后打印 (纯里程计增量优化不打印, 否则刷屏).
+    # 日常跑用 false; 怀疑回环有问题时临时设 true.
+    diag_enable: true
+
+
 
     # ============================================================
     # 回环可视化

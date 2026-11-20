@@ -105,7 +105,8 @@ namespace LI2Sup{
 
   int    g_icp_max_correspondence_distance = 15;
   int    g_icp_max_iterations = 100;
-  double g_icp_fitness_score_threshold = 0.6;
+  // 单位 m^2 (PCL 的 fitness score 是平方距离均值), 0.3 -> RMS 0.55m.
+  double g_icp_fitness_score_threshold = 0.3;
   int    g_icp_history_search_num = 5;
 
   // GTSAM 噪声 (1-sigma).
@@ -119,6 +120,8 @@ namespace LI2Sup{
   double g_pg_prior_trans_sigma = 1e-6;
 
   bool   g_loop_writeback_enable = true;
+  // [DIAG] 是否开启位姿图残差诊断. 日常运行关掉.
+  bool   g_pg_diag_enable = false;
   bool   g_loop_keyframe_map_enable = true;
   bool   g_loop_visual_enable = true;
   int    g_loop_visual_map_interval = 50;

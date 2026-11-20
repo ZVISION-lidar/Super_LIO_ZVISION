@@ -147,6 +147,12 @@ namespace LI2Sup{
 
   /// 回环优化后是否把优化位姿回写到 ESKF (前端里程计对齐)
   extern bool   g_loop_writeback_enable;
+  /// [DIAG] 是否开启位姿图残差诊断.
+  ///   关闭: 一行都不打 (日常运行推荐).
+  ///   开启: 每次含回环的优化后, 打印
+  ///         a) 一行 chi2 汇总 (总数 / 里程计均值 / 回环均值);
+  ///         b) 本次【新增】回环因子的残差明细 (dev 相对 sigma 是多少倍).
+  extern bool   g_pg_diag_enable;
   /// 回环优化后是否用关键帧重拼接地图 (SaveMapByKeyframe)
   extern bool   g_loop_keyframe_map_enable;
   /// 回环可视化总开关.

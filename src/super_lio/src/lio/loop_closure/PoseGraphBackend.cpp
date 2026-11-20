@@ -1,9 +1,14 @@
 #include "lio/loop_closure/PoseGraphBackend.h"
 
 #include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 
 #include <gtsam/geometry/Pose3.h>
+#include <gtsam/geometry/Rot3.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -22,6 +27,24 @@ gtsam::noiseModel::Diagonal::shared_ptr makeNoise(double rot_sigma,
        trans_sigma * trans_sigma;
   return gtsam::noiseModel::Diagonal::Variances(v);
 }
+} // namespace
+
+namespace {
+/// [DIAG] 单个因子的残差诊断信息.
+struct FactorDiag {
+  std::string type;         ///< "Prior" / "Odom" / "Loop"
+  std::size_t key_a = 0;    ///< 第一个节点
+  std::size_t key_b = 0;    ///< 第二个节点
+  bool is_prior = false;    ///< true = 先验因子
+  bool is_loop = false;     ///< true = 回环因子
+  bool is_new = false;      ///< true = 本次优化新增的因子
+  double chi2 = 0.0;        ///< 该因子贡献的 chi2 (已按噪声模型白化)
+  double trans_err = 0.0;   ///< 平移偏差 (m), 原始值
+  double rot_err = 0.0;     ///< 旋转偏差 (rad), 原始值
+  double trans_sigma = 0.0; ///< 平移 sigma
+  double rot_sigma = 0.0;   ///< 旋转 sigma
+  double baseline = 0.0;    ///< 回环因子: 两节点在图内的距离 (m)
+};
 } // namespace
 
 PoseGraphBackend::PoseGraphBackend() {
@@ -92,6 +115,17 @@ void PoseGraphBackend::addPriorFactor(std::size_t id,
   pending_initial_.insert<gtsam::Pose3>(id, toGtsam(pose));
   ++pending_factors_;
   if (id + 1 > node_count_) node_count_ = id + 1;
+
+  // [DIAG] 记录因子元信息 (与 full_graph_ 顺序一致).
+  FactorMeta meta;
+  meta.key_a = id;
+  meta.key_b = id;
+  meta.is_prior = true;
+  meta.rot_sigma = options_.prior_rot_sigma;
+  meta.trans_sigma = options_.prior_trans_sigma;
+  meta.z = toGtsam(pose);
+  meta.is_new = true;
+  factor_metas_.push_back(meta);
 }
 
 void PoseGraphBackend::addOdomFactor(std::size_t id,
@@ -113,6 +147,17 @@ void PoseGraphBackend::addOdomFactor(std::size_t id,
   pending_initial_.insert<gtsam::Pose3>(id, T_curr);
   ++pending_factors_;
   if (id + 1 > node_count_) node_count_ = id + 1;
+
+  // [DIAG] 记录因子元信息.
+  FactorMeta meta;
+  meta.key_a = id - 1;
+  meta.key_b = id;
+  meta.is_prior = false;
+  meta.rot_sigma = options_.odom_rot_sigma;
+  meta.trans_sigma = options_.odom_trans_sigma;
+  meta.z = T_rel;
+  meta.is_new = true;
+  factor_metas_.push_back(meta);
 }
 
 void PoseGraphBackend::addLoopFactor(std::size_t id_from, std::size_t id_to,
@@ -133,8 +178,21 @@ void PoseGraphBackend::addLoopFactor(std::size_t id_from, std::size_t id_to,
   ++pending_factors_;
   ++pending_loop_factors_;
   ++loop_factor_count_;
+
+  // [DIAG] 记录因子元信息.
+  FactorMeta meta;
+  meta.key_a = id_from;
+  meta.key_b = id_to;
+  meta.is_prior = false;
+  meta.rot_sigma = rot;
+  meta.trans_sigma = trans;
+  meta.z = toGtsam(T_between);
+  meta.is_loop = true;
+  meta.is_new = true;
+  factor_metas_.push_back(meta);
 }
-bool PoseGraphBackend::optimize(std::vector<BASIC::SE3>& poses_out) {
+bool PoseGraphBackend::optimize(std::vector<BASIC::SE3>& poses_out,
+                                bool diag_enable) {
   poses_out.clear();
 
   // 提交新因子.
@@ -185,6 +243,11 @@ bool PoseGraphBackend::optimize(std::vector<BASIC::SE3>& poses_out) {
       pending_factors_ = 0;
       pending_loop_factors_ = 0;
       last_residual_ = std::numeric_limits<double>::infinity();
+      // [DIAG] 失败也要清"新增"标记, 否则这批因子会在下次成功优化时
+      //        被当成"本次新增"重复打印 (它们其实已经是很老的因子了).
+      for (FactorMeta& m : factor_metas_) {
+        m.is_new = false;
+      }
       LOG(WARNING) << YELLOW << " ---> [PoseGraph]: ISAM2 update failed: "
                    << e.what() << RESET;
       return false;
@@ -222,7 +285,248 @@ bool PoseGraphBackend::optimize(std::vector<BASIC::SE3>& poses_out) {
     last_residual_ = std::numeric_limits<double>::infinity();
   }
 
+  // [DIAG] 逐因子残差诊断 (只在显式请求时执行, 默认关闭).
+  if (diag_enable) {
+    diagnoseFactorResiduals(true, estimate);
+  }
+
+  // [DIAG] 清掉"本次新增"标记.
+  //
+  //   放在诊断之后: 诊断要看到刚加进来的因子.
+  //   下一个关键帧又会加新的里程计因子, 它们会被重新标记 is_new,
+  //   但老的回环因子不会再被当成"新增"重复打印.
+  for (FactorMeta& m : factor_metas_) {
+    m.is_new = false;
+  }
+
   return true;
+}
+
+// ============================================================
+// [DIAG] 逐因子残差诊断
+// ============================================================
+//
+// 目的: 回答"残差 1631 到底是谁贡献的".
+//
+// 背景: full_graph_.error() 返回的是【白化后】的 chi2 平方和.
+//   也就是说, 一个 0.5cm 的平移偏差在 sigma=0.01 的里程计因子上
+//   会被放大成 (0.005/0.01)^2 = 0.25, 而一个 2cm 的偏差就是 4.
+//   所以残差的绝对值既取决于"图有多不一致", 也取决于"sigma 有多紧",
+//   单看一个数字没法判断问题在哪.
+//
+// 本函数把每个因子的贡献拆开, 让人一眼看出:
+//   - 是少数几个长基线回环因子炸了 (=> 那几个回环可能接错地方)
+//   - 还是误差均匀摊在所有里程计因子上 (=> sigma 过紧 + 累积漂移, 正常)
+//
+// 输出两部分:
+//   1) 一行 chi2 汇总 (总数 / 里程计均值 / 回环均值).
+//      里程计均值高 = 正常的累积漂移被紧 sigma 放大了, 不是 bug.
+//      回环均值高 = 有回环接错了地方, 需要警惕.
+//
+//   2) 本次【新增】回环因子的明细 (不限条数).
+//      【为什么只打新增的】全图 chi2 最大的那几个因子, 每次优化基本都是
+//      同样那几条早期回环, 连续打 50 次都是重复内容, 没有新信息量.
+//      而"刚加进去的这个回环靠不靠谱"每次都不同 —— dev 远大于 sigma
+//      就说明它接错了地方, 图会试图硬拉, 轨迹会变形.
+//
+// 只打日志, 不改动任何优化逻辑.
+std::size_t PoseGraphBackend::diagnoseFactorResiduals(
+    bool enable, const gtsam::Values& estimate) const {
+  if (!enable) return 0;
+  if (full_graph_.empty() || estimate.empty()) return 0;
+
+  std::vector<FactorDiag> diags;
+  diags.reserve(full_graph_.size());
+
+  double total_chi2 = 0.0;
+  double odom_chi2 = 0.0;
+  double loop_chi2 = 0.0;
+  double prior_chi2 = 0.0;
+  std::size_t odom_count = 0;
+  std::size_t loop_count = 0;
+
+  std::size_t factor_index = 0;
+  for (const gtsam::NonlinearFactor::shared_ptr& factor : full_graph_) {
+    if (!factor) {
+      ++factor_index;
+      continue;
+    }
+    // factor 本身【不使用】:
+    //   GTSAM 各版本的 NonlinearFactor::error(values) 返回类型不一致
+    //   (有的版本返回 double, 有的返回 Vector), 直接调用会编译失败.
+    //   下面的 chi2 全部由我们自己记录的测量值 + 图内估计值算出.
+
+    // 取该因子的元信息 (sigma / 节点 / 测量值).
+    // full_graph_ 与 factor_metas_ 是同步 push 的, 顺序一一对应.
+    const FactorMeta* meta = nullptr;
+    if (factor_index < factor_metas_.size()) {
+      meta = &factor_metas_[factor_index];
+    }
+    ++factor_index;
+    if (!meta) continue;
+
+    FactorDiag diag;
+    diag.is_prior = meta->is_prior;
+    diag.is_loop = meta->is_loop;
+    diag.is_new = meta->is_new;
+    diag.key_a = meta->key_a;
+    diag.key_b = meta->key_b;
+    diag.rot_sigma = meta->rot_sigma;
+    diag.trans_sigma = meta->trans_sigma;
+
+    // ---- 白化后的 chi2 贡献 (严格对齐 GTSAM 的定义) ----
+    //
+    // 【不调用 factor->error()】
+    //   不同 GTSAM 版本的 NonlinearFactor::error(values) 返回类型不一致
+    //   (本机编译报错: 它返回的是 double, 不是 Vector).
+    //   改为完全自算 —— 我们自己记了因子的测量值 z 和 sigma,
+    //   直接用图内估计值去对比, 结果更可控, 也不受版本影响.
+    //
+    // GTSAM 对 Pose3 因子的定义 (见 BetweenFactor::evaluateError /
+    // PriorFactor::evaluateError):
+    //   BetweenFactor<Pose3>(k1,k2,z):  误差 = Local(z, between(x_k1, x_k2))
+    //   PriorFactor<Pose3>(k,z):        误差 = -Local(x_k, z)
+    //
+    //   Local 返回【6 维切空间误差向量】[w(3), u(3)]:
+    //     w = 旋转向量 (Rot3::Logmap)
+    //     u = 平移分量 —— 注意它【不是】delta 的原始平移,
+    //         而是切空间坐标 (GTSAM_POSE3_EXPMAP=ON 时由 Logmap 给出,
+    //         OFF 时是 first-order 的原始平移).
+    //
+    //   白化 = 逐分量除以对应的 sigma
+    //          (前 3 个用 rot_sigma, 后 3 个用 trans_sigma),
+    //   chi2 = ||白化后误差||^2.
+    //
+    // 【为什么用 traits<Pose3>::Local, 而不是自己写 Logmap】
+    //   GTSAM 的 Local 是否等于 Logmap 取决于编译选项 GTSAM_POSE3_EXPMAP
+    //   (默认 ON). 用 traits 里的公开接口, 才能保证和 GTSAM 自己的
+    //   因子误差【完全一致】, 不受编译选项影响.
+    gtsam::Pose3 x_a;
+    gtsam::Pose3 x_b;
+    try {
+      x_a = estimate.at<gtsam::Pose3>(diag.key_a);
+      x_b = diag.is_prior ? x_a : estimate.at<gtsam::Pose3>(diag.key_b);
+    } catch (const std::exception&) {
+      continue;
+    }
+
+    gtsam::Vector6 e;
+    if (diag.is_prior) {
+      // PriorFactor: 误差 = -Local(x_k, z)
+      e = -gtsam::traits<gtsam::Pose3>::Local(x_a, meta->z);
+    } else {
+      // BetweenFactor: 误差 = Local(z, between(x_k1, x_k2))
+      e = gtsam::traits<gtsam::Pose3>::Local(meta->z, x_a.between(x_b));
+    }
+
+    const gtsam::Vector3 w = e.head<3>();
+    const gtsam::Vector3 u = e.tail<3>();
+
+    // 平移偏差 (m): 切空间平移分量的模长.
+    diag.trans_err = u.norm();
+
+    // 旋转偏差 (rad): 旋转向量的模长.
+    diag.rot_err = w.norm();
+
+    // 白化后的 chi2: 逐分量白化后平方求和 (与 GTSAM 的
+    // squaredMahalanobisDistance 完全一致).
+    //
+    // 【踩过的坑】早期版本写的是 `3.0 * t * t`, 其中 t = |v| / sigma.
+    //   那是错的 —— |v| 已经是 3 维向量的模长, 它的平方【本身就是】
+    //   3 个分量平方和, 再乘 3 等于把 chi2 放大了 3 倍.
+    //   (GTSAM 的 error() 另有 0.5 的 loss 系数, 所以 DIAG 的 total
+    //    恰好是 GTSAM residual 的 2 倍 —— 这个关系现在是有意保持的.)
+    double chi2 = 0.0;
+    if (diag.trans_sigma > 1e-12) {
+      chi2 += (u / diag.trans_sigma).squaredNorm();
+    }
+    if (diag.rot_sigma > 1e-12) {
+      chi2 += (w / diag.rot_sigma).squaredNorm();
+    }
+    diag.chi2 = chi2;
+    total_chi2 += chi2;
+
+    // 分类.
+    //
+    // 【必须用 meta->is_loop, 不能用 key_b == key_a + 1 反推】
+    //   相邻两帧之间也可能存在回环约束 (比如刚走过的路又走回来),
+    //   用下标相邻性反推会把它误分类成里程计因子.
+    if (diag.is_prior) {
+      prior_chi2 += diag.chi2;
+      diag.type = "Prior";
+    } else if (diag.is_loop) {
+      loop_chi2 += diag.chi2;
+      ++loop_count;
+      diag.type = "Loop";
+    } else {
+      odom_chi2 += diag.chi2;
+      ++odom_count;
+      diag.type = "Odom";
+    }
+
+    // 回环因子: 顺便量一下两节点在图内的距离 (基线长度).
+    if (diag.type == "Loop") {
+      try {
+        const gtsam::Pose3 pa = estimate.at<gtsam::Pose3>(diag.key_a);
+        const gtsam::Pose3 pb = estimate.at<gtsam::Pose3>(diag.key_b);
+        diag.baseline = (pb.translation() - pa.translation()).norm();
+      } catch (const std::exception&) {
+        // 忽略.
+      }
+    }
+
+    diags.push_back(std::move(diag));
+  }
+
+  // 按 chi2 从大到小排.
+  std::sort(diags.begin(), diags.end(),
+            [](const FactorDiag& a, const FactorDiag& b) {
+              return a.chi2 > b.chi2;
+            });
+
+  LOG(INFO) << GREEN << " ---> [PoseGraph][DIAG] chi2 breakdown: total = "
+            << total_chi2 << " | odom = " << odom_chi2 << " ("
+            << odom_count << " factors, avg "
+            << (odom_count ? odom_chi2 / static_cast<double>(odom_count) : 0.0)
+            << ")" << " | loop = " << loop_chi2 << " ("
+            << loop_count << " factors, avg "
+            << (loop_count ? loop_chi2 / static_cast<double>(loop_count) : 0.0)
+            << ")" << " | prior = " << prior_chi2 << RESET;
+
+  // 打印本次【新增】回环因子的明细.
+  //
+  // 【为什么只打新增的】
+  //   全图 chi2 最大的那几个因子, 每次优化基本都是同样那几条早期回环,
+  //   连续打 50 次都是重复内容, 没有新信息.
+  //   而"本次新增的回环表现如何"每次都不同, 且正是需要盯的东西:
+  //   dev 远大于 sigma => 这次回环接错了地方, 图会试图硬拉, 轨迹会变形.
+  //
+  // 不限条数: 正常情况下一次优化只新增 1 个回环 (检测线程 2Hz 每次只出
+  // 一个候选); 但如果主线程被长时间阻塞, 检测线程会攒下一批候选一次性
+  // 灌进来 —— 那正是最该逐条看清的情况, 所以这里不做条数截断.
+  std::vector<const FactorDiag*> sel;
+  for (const FactorDiag& d : diags) {
+    if (d.is_new && d.is_loop) sel.push_back(&d);
+  }
+
+  for (std::size_t i = 0; i < sel.size(); ++i) {
+    const FactorDiag& d = *sel[i];
+    std::ostringstream oss;
+    oss << " ---> [PoseGraph][DIAG] #" << (i + 1)
+        << " " << d.type
+        << " [" << d.key_a << "->" << d.key_b << "]"
+        << " chi2 = " << d.chi2
+        << " | dev = " << d.trans_err << " m (sigma " << d.trans_sigma
+        << ", " << (d.trans_sigma > 1e-12 ? d.trans_err / d.trans_sigma : 0.0)
+        << "x)"
+        << " | rot = " << d.rot_err << " rad (sigma " << d.rot_sigma
+        << ", " << (d.rot_sigma > 1e-12 ? d.rot_err / d.rot_sigma : 0.0)
+        << "x)";
+    if (d.is_loop) oss << " | baseline = " << d.baseline << " m";
+    LOG(INFO) << YELLOW << oss.str() << RESET;
+  }
+
+  return diags.size();
 }
 
 bool PoseGraphBackend::getEstimate(std::size_t id, BASIC::SE3& out) const {
@@ -244,6 +548,7 @@ void PoseGraphBackend::reset() {
   last_residual_ = std::numeric_limits<double>::infinity();
   node_count_ = 0;
   loop_factor_count_ = 0;
+  factor_metas_.clear();
   estimates_.clear();
 }
 

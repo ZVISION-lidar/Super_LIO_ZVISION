@@ -165,6 +165,7 @@ void LoadParamFromRos(ros::NodeHandle& nh){
   nh.getParam("/lio/loop_closure/pg_prior_trans_sigma", g_pg_prior_trans_sigma);
 
   nh.getParam("/lio/loop_closure/writeback_enable", g_loop_writeback_enable);
+  nh.getParam("/lio/loop_closure/diag_enable", g_pg_diag_enable);
   nh.getParam("/lio/loop_closure/keyframe_map_enable", g_loop_keyframe_map_enable);
   nh.getParam("/lio/loop_closure/visual_enable", g_loop_visual_enable);
   nh.getParam("/lio/loop_closure/visual_map_interval", g_loop_visual_map_interval);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 
 #include "basic/logs.h"
@@ -250,7 +251,13 @@ bool LoopClosureManager::processLoops(BASIC::SE3& out_corr) {
     if (used == 0) return false;
 
     // ---- 优化 ----
-    if (!backend_->optimize(optimized)) {
+    //
+    // [DIAG] diag_enable = true 时打印残差诊断.
+    //   只在【有回环】的优化里打印 —— 纯里程计增量优化每个关键帧都会跑,
+    //   每次都打印会刷屏, 而且那些增量的残差本来就很小, 没有诊断价值.
+    //   打印内容 = 一行 chi2 汇总 + 本次新增回环因子的明细.
+    //   由参数 /lio/loop_closure/diag_enable 控制 (默认 false).
+    if (!backend_->optimize(optimized, g_pg_diag_enable)) {
       // 优化失败 (GTSAM 抛异常或未收敛).
       //
       // 【不能】把约束重新入队重试:
