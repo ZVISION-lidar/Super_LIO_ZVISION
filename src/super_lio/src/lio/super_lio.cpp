@@ -81,6 +81,19 @@ void SuperLIO::init(){
   effect_knn_idxs_.resize(50000);
   voxel_grid_fliter_.setLeafSize(g_voxel_fliter_size);
 
+  // ============================================================
+  // [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  //   总开关关闭时, 行为与原来完全一致 (不启动线程, 不记录关键帧).
+  // ============================================================
+  if(g_loop_closure_enable){
+    loop_closure_.reset(new LoopClosureManager());
+    loop_closure_->configure();
+    loop_closure_->start();
+    LOG(INFO) << GREEN << " ---> [SuperLIO]: loop closure enabled." << RESET;
+  }else{
+    LOG(INFO) << GREEN << " ---> [SuperLIO]: loop closure disabled." << RESET;
+  }
+
   state_fn_ = &SuperLIO::stateWaitKFInit;
 
   LOG(INFO) << GREEN << " ---> [SuperLIO]: initialized." << RESET;
@@ -206,8 +219,169 @@ void SuperLIO::stateProcess(){
     Observe();
     UpdateMap();
   }
+  // [LOOP-CLOSURE] 先消费回环约束并优化, 再记录新关键帧.
+  //   顺序很重要: 先让位姿图吸收回环修正, 新关键帧的里程计因子
+  //   才能建立在"已修正"的图上.
+  applyLoopWriteback();
+  updateKeyframe();
   Output();
   caceData();
+  publishLoopVisualization();
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 关键帧记录
+//   关键帧点云保存在 IMU 系 (与 kf_->GetSE3() 同系), 位姿是 T_world_body.
+//   这样 ICP 与地图重拼接都不需要 lidar<->body 外参转换.
+// ============================================================
+void SuperLIO::updateKeyframe(){
+  if(!loop_closure_) return;
+  if(!ds_undistort_ || ds_undistort_->empty()) return;
+
+  // ds_undistort_ 就是 imu 系点云, 直接用.
+  BASIC::SE3 corr;
+  if(loop_closure_->maybeAddKeyframe(kf_->GetSE3(), ds_undistort_, corr)){
+    // 新关键帧建立后, 位姿图可能对当前节点产生了偏移, 需要回写.
+    applyCorrection(corr);
+  }
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 把位姿图优化结果回写到 ESKF
+//   注意: 必须用 CorrectPose(), 不能用 SetX().
+//   SetX() 会改写 last_imu_time_, 破坏 IMU 递推的时间基准.
+//
+//   施加方式: T_new = T_corr * T_cur  (T_corr 是世界系下的刚体修正)
+// ============================================================
+void SuperLIO::applyCorrection(const BASIC::SE3& T_corr){
+  if(!loop_closure_ || !g_loop_writeback_enable) return;
+
+  const BASIC::SE3 cur_pose = kf_->GetSE3();
+  const BASIC::SE3 new_pose = T_corr * cur_pose;
+
+  kf_->CorrectPose(BASIC::SO3(new_pose.R_), new_pose.t_, BASIC::SO3(cur_pose.R_));
+
+  // 只有修正量有意义时才打印.
+  // 新建关键帧时位姿图几乎不变, dp 只有 1e-6 量级, 那是浮点噪声,
+  // 每个关键帧都打一遍既刷屏又没有信息量.
+  // 真正有回环拉回时 dp 是 0.1~1m 量级.
+  const BASIC::V3 dp = new_pose.t_ - cur_pose.t_;
+  if(dp.norm() < 1e-3) return;
+
+  LOG(INFO) << GREEN << " ---> [SuperLIO]: loop writeback applied, "
+            << "dp = [" << dp.x() << ", " << dp.y() << ", "
+            << dp.z() << "], |dp| = " << dp.norm() << " m" << RESET;
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 消费回环约束 -> 位姿图优化 -> 回写 ESKF
+//   必须在主线程做 (与 EKF 更新串行), 保证帧一致性.
+//
+//   [BUG FIX] 这里【不能】用 g_loop_writeback_enable 提前返回.
+//     之前写成:
+//         if(!loop_closure_ || !g_loop_writeback_enable) return;
+//     结果 writeback_enable=false 时 processLoops() 一次都没被调用,
+//     addLoopFactor() 一次都没执行 —— 回环约束全部烂在队列里,
+//     位姿图里从来就没有过回环因子.
+//
+//     现在: 位姿图优化【始终】进行 (回环约束必然入图),
+//           只有"把结果写回 ESKF"这一步由 writeback_enable 控制.
+// ============================================================
+void SuperLIO::applyLoopWriteback(){
+  if(!loop_closure_) return;
+
+  BASIC::SE3 T_corr;
+  if(!loop_closure_->processLoops(T_corr)) return;
+
+  // 回写是独立开关: 位姿图照常优化, 只是不一定改 ESKF.
+  applyCorrection(T_corr);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 回环可视化
+//   发布回环边 (LINE_LIST) 和优化后的关键帧轨迹.
+//
+//   分成两类, 用 g_loop_visual_enable 控制:
+//     - 【始终发布】(开销极小, 信息量高):
+//         /lio/loop_closure_constraints  回环节点 + 回环边
+//         /lio/loop_path                 优化后的关键帧轨迹
+//         /lio/loop_path_before          优化前的关键帧轨迹 (对比用)
+//
+//     - 【受开关控制】(开销大):
+//         /lio/loop_map_optimized         优化后的全局地图 (要变换所有关键帧)
+//         /lio/loop_icp_*_cloud           ICP 匹配的点云
+// ============================================================
+void SuperLIO::publishLoopVisualization(){
+  if(!loop_closure_) return;
+
+  // 限频, 避免刷屏.
+  if(++loop_vis_counter_ < 10) return;
+  loop_vis_counter_ = 0;
+
+  const std::vector<BASIC::SE3> poses = loop_closure_->optimizedPoses();
+  const std::vector<LoopClosureManager::LoopEdge> edges =
+      loop_closure_->loopEdges();
+
+  // ============================================================
+  // 始终发布: 回环 marker (节点 + 边) 与优化前/后轨迹
+  // ============================================================
+  std::vector<LoopEdgeInfo> ros_edges;
+  ros_edges.reserve(edges.size());
+  for(const auto& edge : edges){
+    ros_edges.push_back({edge.from_index, edge.to_index, edge.fitness_score});
+  }
+  data_wrapper_->pub_loop_closure(poses, ros_edges);
+
+  // "优化前"的轨迹 (原始 ESKF 位姿).
+  // 与上面的"优化后"轨迹叠加, 一眼看出回环把漂移拉回了多少.
+  const std::vector<BASIC::SE3> odom_poses =
+      loop_closure_->keyframeManager()->getOdomPoses();
+  if(!odom_poses.empty()){
+    data_wrapper_->pub_loop_path_before(odom_poses);
+  }
+
+  // ============================================================
+  // 以下是重负载, 受 g_loop_visual_enable 控制
+  // ============================================================
+  if(!g_loop_visual_enable) return;
+
+  // ---- ICP 匹配的点云 ----
+  //   只在【新回环检出时】才发.
+  //   (之前是 icp_viz.valid 一旦为 true 就每帧重发同样的 3 个点云,
+  //    内容完全没变, 白白占 CPU 和带宽.)
+  const LoopDetector::IcpVisualization icp_viz =
+      loop_closure_->lastIcpVisualization();
+  if(icp_viz.valid && icp_viz.seq != last_icp_viz_seq_){
+    last_icp_viz_seq_ = icp_viz.seq;
+    data_wrapper_->pub_loop_icp_clouds(icp_viz.history_cloud,
+                                       icp_viz.corrected_cloud,
+                                       icp_viz.raw_cloud);
+  }
+
+  // ---- 优化后的全局地图 (关键帧重拼接) ----
+  //   开销大 (要变换所有关键帧点云), 所以低频发.
+  //   对应 fastlio_sam 的 map_global_optimized.
+  if(++loop_map_counter_ < g_loop_visual_map_interval) return;
+  loop_map_counter_ = 0;
+  BASIC::CloudPtr opt_map(new PointCloudType());
+  if(loop_closure_->keyframeManager()->getAllWorldCloud(opt_map) &&
+     !opt_map->empty()){
+    // 降采样一下再发, 否则 RViz 会卡.
+    if(g_if_filter){
+      PointCloudType filtered;
+      pcl::VoxelGrid<PointType> voxel_filter;
+      voxel_filter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
+      voxel_filter.setInputCloud(opt_map);
+      voxel_filter.filter(filtered);
+      opt_map.reset(new PointCloudType());
+      *opt_map = filtered;
+    }
+    data_wrapper_->pub_loop_map_optimized(opt_map);
+  }
 }
 
 
@@ -312,8 +486,61 @@ void SuperLIO::ProcessCaceMap(){
 }
 
 
+// ============================================================
+// [LOOP-CLOSURE] 关键帧重拼接保存地图
+//   用 ISAM2 优化后的关键帧位姿把关键帧点云 (imu 系) 变换到世界系再拼接.
+//   这样保存出的地图与优化后的位姿完全一致 (不需要重建在线地图).
+// ============================================================
+bool SuperLIO::saveMapByKeyframe(const std::string& file_name){
+  if(!loop_closure_) return false;
+
+  BASIC::CloudPtr map_cloud(new PointCloudType());
+  if(!loop_closure_->keyframeManager()->getAllWorldCloud(map_cloud)) return false;
+
+  // 降采样
+  // 注意 PCL 1.10 的 API:
+  //   setInputCloud(shared_ptr)  -- 传指针
+  //   filter(reference)          -- 传引用 (输出可以是栈对象)
+  if(g_if_filter){
+    PointCloudType filtered;
+    pcl::VoxelGrid<PointType> voxel_filter;
+    voxel_filter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
+    voxel_filter.setInputCloud(map_cloud);
+    voxel_filter.filter(filtered);
+    map_cloud.reset(new PointCloudType());
+    *map_cloud = filtered;
+  }
+
+  if(map_cloud->empty()) return false;
+
+  map_cloud->width = map_cloud->size();
+  map_cloud->height = 1;
+  map_cloud->is_dense = false;
+
+  pcl::io::savePCDFileBinary(file_name, *map_cloud);
+  LOG(INFO) << GREEN << " ---> [SuperLIO]: keyframe map saved to: " << file_name
+            << ", size: " << map_cloud->size() << RESET;
+  return true;
+}
+
+
 void SuperLIO::saveMap(){
   if(!g_save_map) return;
+
+  // ============================================================
+  // [LOOP-CLOSURE] 开启回环时, 用关键帧重拼接保存地图.
+  //   这样保存的地图与 ISAM2 优化后的位姿完全一致,
+  //   而在线地图 (OctVoxMap) 保持原样, 不做重建 (与 fastlio_sam 一致).
+  // ============================================================
+  if(loop_closure_ && g_loop_keyframe_map_enable){
+    const std::string map_name = g_save_map_dir + "/" + g_map_name;
+    LOG(INFO) << YELLOW << " ---> Saving map by keyframe (aligned with "
+              << "pose graph optimization) ..." << RESET;
+    if(saveMapByKeyframe(map_name)) return;
+    LOG(WARNING) << YELLOW << " ---> Keyframe map saving failed, "
+                 << "falling back to normal saving ..." << RESET;
+  }
+
   if(g_pcd_save_interval > 0){
     LOG(INFO) << YELLOW << " ---> Saving last cace ... " << RESET;
     if (point_map_->size() > 0) {
@@ -541,6 +768,10 @@ void SuperLIO::Observe(){
     iter_num++;
   });
 
+  // [ALIGN-FastLIVO2] 前向递推重锚定.
+  // EKF 后验 (v_/R_/p_) 已确定, 通知 ESKF 把前向状态重置到后验,
+  // 并在下一条 IMU 到来时用 ~5ms 的细粒度步长逐条重积分.
+  // (对应 FastLIVO2 的 state_update_flg = true)
   kf_->NotifyForwardAnchor(measures_.lidar.end_time);
 
   frame_num_++;

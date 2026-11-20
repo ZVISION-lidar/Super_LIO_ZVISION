@@ -97,6 +97,64 @@ void ESKF::SetX(const SysState& x) {
 }
 
 
+// ============================================================
+// [LOOP-CLOSURE] 回环优化结果回写
+// ============================================================
+//  用位姿图优化后的位姿直接覆盖 ESKF 当前状态.
+//
+//  注意: 不能用 SetX().
+//    SetX() 会改写 last_imu_time_, 破坏 IMU 递推的时间基准
+//    (下一次 Predict 计算出的 dt 会突变).
+//
+//  CorrectPose() 只修改"当前时刻的位姿", 保持时间基准不动:
+//    - R_ / p_            : 后验状态
+//    - fw_R_ / fw_p_ / fw_v_ : 前向递推状态 (同步, 避免前向预测跳变)
+//    - 不动 last_imu_time_ / current_time_ / last_obs_time_ / fw_last_integr_time_
+//
+//  施加方式: T_new = T_corr * T_cur  (T_corr 是世界系下的刚体修正)
+void ESKF::CorrectPose(const SO3& R_new, const V3& p_new, const SO3& R_old)
+{
+  (void)R_old;  // fastlio_sam 也不用旧姿态, 这里保留只是为了接口兼容/诊断.
+
+  // ---- 姿态: 经四元数中转, 保证严格正交 ----
+  //   Quat(R) 从矩阵构造, 再 normalize() 强制单位化.
+  Quat q_new(R_new.R());
+  q_new.normalize();
+  R_ = SO3(q_new.toRotationMatrix());
+
+  // ---- 位置: 直接赋值 ----
+  p_ = p_new;
+
+  // ---- 速度: 不动 (与 fastlio_sam 的 change_x() 一致) ----
+  //   注意: 不能用 R_corr * v_ 的写法. 速度在 body 系里数值不变,
+  //   而世界系速度要跟着世界系旋转一起转, 两者不等价;
+  //   fastlio_sam 选择不动速度, 这里跟随它.
+
+  // ---- 前向递推状态同步 (不重置 fw_last_integr_time_, 保持时间连续) ----
+  fw_R_ = R_;
+  fw_p_ = p_;
+  fw_v_ = v_;
+
+  // 协方差不变: 优化只修正均值, 不改变不确定度.
+  // (fastlio_sam 也明确注释说改 P 会跑飞, 所以不碰.)
+}
+
+
+// ============================================================
+// [BUG FIX] 重正交化 (见头文件 NormalizeRotation() 的说明)
+// ============================================================
+void ESKF::NormalizeRotation()
+{
+  Quat q(R_.R());
+  q.normalize();
+  R_ = SO3(q.toRotationMatrix());
+
+  Quat q_fw(fw_R_.R());
+  q_fw.normalize();
+  fw_R_ = SO3(q_fw.toRotationMatrix());
+}
+
+
 void ESKF::BuildNoise(const Options& options) {
   double et = options.gyro_var_;
   double ev = options.acce_var_;
@@ -129,7 +187,7 @@ void ESKF::Update() {
   fw_R_ = R_;
   fw_p_ = p_;
   fw_v_ = v_;
-  // 前向递推的重锚定不在这里做, 而是由
+  // [ALIGN-FastLIVO2] 前向递推的重锚定不在这里做, 而是由
   // NotifyForwardAnchor() 统一处理 (见该函数注释).
   // 原因: Update() 会被 UpdateObserve() 的迭代循环多次调用,
   // 而"丢弃缓冲 + 逐条重积分"只需要做一次, 且必须在 buffer 完整时做.
@@ -137,11 +195,14 @@ void ESKF::Update() {
 
 
 // ============================================================
-// 前向递推的单步积分:
+// [ALIGN-FastLIVO2] 前向递推的单步积分
+//   与 FastLIVO2 的 prop_imu_once() 完全同构:
 //     1) 半隐式: 先用角速度更新姿态, 再用【新姿态】把 body 加速度转到世界系;
 //     2) 加速度 = 原始值 * imu_scale_ - ba_;
 //     3) 世界系比力 = R * acc + g_  (g_ 是世界系重力)
 //     4) 位置/速度用梯形积分.
+//   差别只在加速度取值: FastLIVO2 用单样本, 这里用中点平均
+//   (中点平均对白噪声的抑噪效果更好, 不改变整体行为).
 // ============================================================
 void ESKF::ForwardPropagateOnce(double dt, const V3& acc_raw, const V3& gyr_raw)
 {
@@ -165,8 +226,9 @@ void ESKF::ForwardPropagateOnce(double dt, const V3& acc_raw, const V3& gyr_raw)
 
 
 // ============================================================
-// 前向递推的重锚定
-//   在 EKF 更新完成 (后验 v_ 已确定) 后由 Observe() 调用:
+// [ALIGN-FastLIVO2] 前向递推的重锚定
+//   在 EKF 更新完成 (后验 v_ 已确定) 后由 Observe() 调用.
+//   对应 FastLIVO2 的 state_update_flg 分支:
 //     - imu_propagate = latest_ekf_state   (前向状态重置到后验)
 //     - 丢弃早于锚点的 IMU
 //     - 剩下的 IMU 逐条重积分 (每条一个 ~5ms 的 dt)
@@ -193,8 +255,8 @@ void ESKF::NotifyForwardAnchor(double anchor_time)
 
 
 // ============================================================
-//  前向递推 (纯 IMU 推算) 的主入口
-//   与 Predict(imu, state_imu, state_robot) 等价 :
+// [ALIGN-FastLIVO2] 前向递推 (纯 IMU 推算) 的主入口
+//   与 Predict(imu, state_imu, state_robot) 等价, 但行为对齐 FastLIVO2:
 //     - 维护独立的递推 IMU 缓冲 (fw_imu_buffer_)
 //     - 锚点后逐条重积分, 步长恒为 ~5ms (而不是一次大 dt)
 // ============================================================
@@ -324,7 +386,7 @@ bool ESKF::ForwardPredict(const IMUData& imu, DynamicState& state_imu, DynamicSt
 
 
 bool ESKF::Predict(const IMUData& imu, DynamicState& state_imu, DynamicState& state_robot){
-  // 已统一走 ForwardPredict().
+  // [ALIGN-FastLIVO2] 已统一走 ForwardPredict().
   // 旧实现在 EKF 锚点后不做"逐条重积分", 会用单条 acc 外推一大段 dt,
   // 导致每个 LIO 帧向速度注入一个尖峰.
   return ForwardPredict(imu, state_imu, state_robot);

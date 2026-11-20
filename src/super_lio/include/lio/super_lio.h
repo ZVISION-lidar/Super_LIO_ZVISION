@@ -21,13 +21,17 @@
 #include "OctVoxMap/OctVoxMap.hpp"
 #include "OctVoxMap/VoxelGridFilter.h"
 #include "ros/ROSWrapper.h"
+#include "lio/loop_closure/LoopClosureManager.h"
 
 namespace LI2Sup{
 
 class SuperLIO{
 public:
   SuperLIO(){};
-  ~SuperLIO(){};
+  ~SuperLIO(){
+    // [LOOP-CLOSURE] 停止回环线程.
+    if(loop_closure_) loop_closure_->stop();
+  };
 
   void setROSWrapper(const ROSWrapper::Ptr& wrapper){
     data_wrapper_ = wrapper;
@@ -50,6 +54,20 @@ protected:
   virtual void Output();
   void caceData();
   void ProcessCaceMap();
+
+  // ============================================================
+  // [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  // ============================================================
+  /// 记录关键帧 (主线程).
+  void updateKeyframe();
+  /// 把位姿图优化结果回写到 ESKF.
+  void applyCorrection(const BASIC::SE3& T_corr);
+  /// 消费回环约束 -> 位姿图优化 -> 回写 ESKF (主线程).
+  void applyLoopWriteback();
+  /// 回环可视化发布.
+  void publishLoopVisualization();
+  /// [LOOP-CLOSURE] 用关键帧重拼接保存地图 (与优化后位姿对齐).
+  bool saveMapByKeyframe(const std::string& file_name);
 
   using StateFn = void (SuperLIO::*)();
   using OctVoxMapType = OctVoxMap<BASIC::V3, BASIC::scalar>;
@@ -79,6 +97,17 @@ protected:
   std::vector<std::pair<BASIC::M6, BASIC::V6>> H_R_;
   std::vector<std::array<double, 4>> abcd_vec_;
   int pcd_index_ = -1;
+
+  // ============================================================
+  // [LOOP-CLOSURE] 回环检测 + 位姿图优化
+  // ============================================================
+  LoopClosureManager::Ptr loop_closure_;
+  /// 回环可视化限频计数器
+  int loop_vis_counter_ = 0;
+  /// 优化后全局地图的发布间隔计数器
+  int loop_map_counter_ = 0;
+  /// 上一次发布 ICP 调试点云的序号 (只在【新回环】时才发)
+  std::size_t last_icp_viz_seq_ = 0;
 
   Timer time_record_;
 };

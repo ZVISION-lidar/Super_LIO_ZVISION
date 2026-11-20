@@ -80,10 +80,13 @@ void LoadParamFromRos(rclcpp::Node& node)
   node.get_parameter("lio.sensor.imu_nbg", g_imu_nbg);
 
   // ================= IMU vibration suppression filter =================
+  // [默认关闭] yaml 里不写这两个参数 = 不滤波.
+  // 滤波会引入相位延迟, 且与 FastLIVO2 的裸 IMU 直推行为不一致;
+  // 需要开启时在 yaml 里显式设 lio.sensor.imu_notch_enable / imu_lp_enable: true.
   node.declare_parameter<bool>("lio.sensor.imu_notch_enable", false);
   node.get_parameter("lio.sensor.imu_notch_enable", g_imu_notch_enable);
 
-  node.declare_parameter<bool>("lio.sensor.imu_lp_enable", true);
+  node.declare_parameter<bool>("lio.sensor.imu_lp_enable", false);
   node.get_parameter("lio.sensor.imu_lp_enable", g_imu_lp_enable);
 
   node.declare_parameter<double>("lio.sensor.imu_filt_fs", 197.98);
@@ -216,6 +219,93 @@ void LoadParamFromRos(rclcpp::Node& node)
   g_init_roll  = init_pose[3];
   g_init_pitch = init_pose[4];
   g_init_yaw   = init_pose[5];
+
+  // ================= [LOOP-CLOSURE] 回环检测 + 位姿图优化 =================
+  node.declare_parameter<bool>("lio.loop_closure.enable", false);
+  node.get_parameter("lio.loop_closure.enable", g_loop_closure_enable);
+
+  node.declare_parameter<double>("lio.loop_closure.frequency", 2.0);
+  node.get_parameter("lio.loop_closure.frequency", g_loop_closure_frequency);
+
+  // 关键帧判定阈值 (位移与角度同时满足才建关键帧)
+  node.declare_parameter<double>("lio.loop_closure.keyframe_dist", 1.0);
+  node.get_parameter("lio.loop_closure.keyframe_dist", g_keyframe_dist);
+  node.declare_parameter<double>("lio.loop_closure.keyframe_angle", 0.2);
+  node.get_parameter("lio.loop_closure.keyframe_angle", g_keyframe_angle);
+
+  // Scan Context 描述子
+  node.declare_parameter<int>("lio.loop_closure.sc_num_rings", 20);
+  node.get_parameter("lio.loop_closure.sc_num_rings", g_sc_num_rings);
+  node.declare_parameter<int>("lio.loop_closure.sc_num_sectors", 60);
+  node.get_parameter("lio.loop_closure.sc_num_sectors", g_sc_num_sectors);
+  node.declare_parameter<double>("lio.loop_closure.sc_max_radius", 80.0);
+  node.get_parameter("lio.loop_closure.sc_max_radius", g_sc_max_radius);
+  node.declare_parameter<double>("lio.loop_closure.sc_lidar_height", 2.0);
+  node.get_parameter("lio.loop_closure.sc_lidar_height", g_sc_lidar_height);
+  node.declare_parameter<int>("lio.loop_closure.sc_exclude_recent", 30);
+  node.get_parameter("lio.loop_closure.sc_exclude_recent", g_sc_exclude_recent);
+  node.declare_parameter<int>("lio.loop_closure.sc_num_candidates", 10);
+  node.get_parameter("lio.loop_closure.sc_num_candidates", g_sc_num_candidates);
+  node.declare_parameter<double>("lio.loop_closure.sc_search_ratio", 0.1);
+  node.get_parameter("lio.loop_closure.sc_search_ratio", g_sc_search_ratio);
+  node.declare_parameter<double>("lio.loop_closure.sc_distance_threshold", 0.15);
+  node.get_parameter("lio.loop_closure.sc_distance_threshold", g_sc_distance_threshold);
+
+  // ICP 几何验证
+  //   icp_fitness_score_threshold 单位是 m^2 (PCL 的 fitness score 是
+  //   平方距离的均值), 开方才是实际 RMS 对齐误差: 0.3 -> 0.55m.
+  node.declare_parameter<int>("lio.loop_closure.icp_max_correspondence_distance", 15);
+  node.get_parameter("lio.loop_closure.icp_max_correspondence_distance",
+                     g_icp_max_correspondence_distance);
+  node.declare_parameter<int>("lio.loop_closure.icp_max_iterations", 100);
+  node.get_parameter("lio.loop_closure.icp_max_iterations", g_icp_max_iterations);
+  node.declare_parameter<double>("lio.loop_closure.icp_fitness_score_threshold", 0.3);
+  node.get_parameter("lio.loop_closure.icp_fitness_score_threshold",
+                     g_icp_fitness_score_threshold);
+  node.declare_parameter<int>("lio.loop_closure.icp_history_search_num", 5);
+  node.get_parameter("lio.loop_closure.icp_history_search_num", g_icp_history_search_num);
+
+  // GTSAM 位姿图噪声 (1-sigma)
+  node.declare_parameter<double>("lio.loop_closure.pg_odom_rot_sigma", 0.001);
+  node.get_parameter("lio.loop_closure.pg_odom_rot_sigma", g_pg_odom_rot_sigma);
+  node.declare_parameter<double>("lio.loop_closure.pg_odom_trans_sigma", 0.01);
+  node.get_parameter("lio.loop_closure.pg_odom_trans_sigma", g_pg_odom_trans_sigma);
+  node.declare_parameter<double>("lio.loop_closure.pg_loop_rot_sigma", 0.005);
+  node.get_parameter("lio.loop_closure.pg_loop_rot_sigma", g_pg_loop_rot_sigma);
+  node.declare_parameter<double>("lio.loop_closure.pg_loop_trans_sigma", 0.05);
+  node.get_parameter("lio.loop_closure.pg_loop_trans_sigma", g_pg_loop_trans_sigma);
+  node.declare_parameter<double>("lio.loop_closure.pg_prior_rot_sigma", 0.000001);
+  node.get_parameter("lio.loop_closure.pg_prior_rot_sigma", g_pg_prior_rot_sigma);
+  node.declare_parameter<double>("lio.loop_closure.pg_prior_trans_sigma", 0.000001);
+  node.get_parameter("lio.loop_closure.pg_prior_trans_sigma", g_pg_prior_trans_sigma);
+  // [DIAG] 位姿图残差诊断开关 (false = 关闭, 日常运行推荐)
+  node.declare_parameter<bool>("lio.loop_closure.diag_enable", false);
+  node.get_parameter("lio.loop_closure.diag_enable", g_pg_diag_enable);
+
+  // 回环后是否把优化位姿回写到前端 ESKF
+  node.declare_parameter<bool>("lio.loop_closure.writeback_enable", true);
+  node.get_parameter("lio.loop_closure.writeback_enable", g_loop_writeback_enable);
+  // 退出时是否用关键帧重拼接保存地图
+  node.declare_parameter<bool>("lio.loop_closure.keyframe_map_enable", false);
+  node.get_parameter("lio.loop_closure.keyframe_map_enable", g_loop_keyframe_map_enable);
+  // 回环可视化 (只控制重负载部分: 点云/优化后地图)
+  node.declare_parameter<bool>("lio.loop_closure.visual_enable", true);
+  node.get_parameter("lio.loop_closure.visual_enable", g_loop_visual_enable);
+  node.declare_parameter<int>("lio.loop_closure.visual_map_interval", 50);
+  node.get_parameter("lio.loop_closure.visual_map_interval", g_loop_visual_map_interval);
+
+  // 参数合法性检查 (防止 yaml 写错导致运行时异常)
+  if (g_sc_exclude_recent < 1) g_sc_exclude_recent = 1;
+  if (g_sc_num_candidates < 1) g_sc_num_candidates = 1;
+  if (g_icp_history_search_num < 0) g_icp_history_search_num = 0;
+  if (g_loop_closure_frequency <= 0.0) g_loop_closure_frequency = 1.0;
+  if (g_loop_visual_map_interval < 1) g_loop_visual_map_interval = 1;
+
+  LOG(INFO) << GREEN << " ---> [Param] loop_closure/enable: "
+            << (g_loop_closure_enable ? "true" : "false")
+            << ", frequency: " << g_loop_closure_frequency << " Hz"
+            << ", diag_enable: " << (g_pg_diag_enable ? "true" : "false")
+            << RESET;
 
   LOG(INFO) << GREEN << " ---> [Params]: Load from ROS2 parameter server."
             << RESET;
@@ -375,6 +465,36 @@ void ROSWrapper::setupIO(){
     this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "/lio/cloud_world", 10);
 
+  // ============================================================
+  // [LOOP-CLOSURE] 回环可视化
+  // ============================================================
+  // 回环节点 + 回环边 (一个 topic 里装两个 marker).
+  pub_loop_markers_ =
+      this->create_publisher<visualization_msgs::msg::MarkerArray>(
+          "/lio/loop_closure_constraints", 10);
+
+  // 优化后 / 优化前 的关键帧轨迹 (叠加显示, 一眼看出回环拉回了多少).
+  pub_loop_path_ =
+      this->create_publisher<nav_msgs::msg::Path>("/lio/loop_path", 10);
+  pub_loop_path_before_ =
+      this->create_publisher<nav_msgs::msg::Path>("/lio/loop_path_before", 10);
+
+  // 优化后的全局地图 (关键帧重拼接) —— 开销大, 低频发.
+  pub_loop_map_optimized_ =
+      this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          "/lio/loop_map_optimized", 1);
+
+  // ICP 匹配的点云 (只在检出新回环时发).
+  pub_loop_icp_history_ =
+      this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          "/lio/loop_icp_history_cloud", 1);
+  pub_loop_icp_corrected_ =
+      this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          "/lio/loop_icp_corrected_cloud", 1);
+  pub_loop_icp_raw_ =
+      this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          "/lio/loop_icp_raw_cloud", 1);
+
   tf_broadcaster_ =
       std::make_shared<tf2_ros::TransformBroadcaster>(this);
 }
@@ -477,7 +597,7 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
   last_timestamp_imu_ = data.secs;
 
   // ============================================================
-  //  前向递推 (纯 IMU 推算)
+  // [ALIGN-FastLIVO2] 前向递推 (纯 IMU 推算)
   //   内部维护独立的递推 IMU 缓冲, 在 EKF 锚点后逐条重积分,
   //   积分步长恒为 ~5ms (与 FastLIVO2 的 prop_imu_once 行为一致).
   //   旧实现锚点后不做重积分, 会用单条 acc 外推一大段 dt,
@@ -644,6 +764,35 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr ms
     lidar_data.end_time = lidar_data.start_time + offset_time;
     break;
   }
+  // case LID_TYPE::ZVISION:
+  // {
+  //   // ZVISION point timestamp field is in seconds; use first valid point timestamp as reference.
+  //   pcl::PointCloud<zvision_ros::Point> pl_orig;
+  //   pcl::moveFromROSMsg(*msg, pl_orig);
+  //   if (pl_orig.empty()) return;
+  //   lidar_data.pc->reserve(pl_orig.size() / g_filter_rate + 1);
+
+  //   double min_offset = std::numeric_limits<double>::max();
+  //   double max_offset = std::numeric_limits<double>::lowest();
+
+  //   for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
+  //     auto& pt = pl_orig.points[i];
+  //     if (!validPoint(pt.x, pt.y, pt.z)) continue;
+  //     min_offset = std::min(min_offset, pt.timestamp);
+  //     max_offset = std::max(max_offset, pt.timestamp);
+  //   }
+
+  //   lidar_data.start_time = min_offset;
+  //   lidar_data.end_time = max_offset;
+
+  //   for (std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate) {
+  //     auto& pt = pl_orig.points[i];
+  //     if (!validPoint(pt.x, pt.y, pt.z)) continue;
+  //     double offset_time = pt.timestamp - lidar_data.start_time;
+  //     lidar_data.pc->emplace_back(pt.x, pt.y, pt.z, pt.intensity, offset_time);
+  //   }
+  //   break;
+  // }
   case LID_TYPE::ZVISION:
   {
     pcl::PointCloud<zvision_ros::Point> pl_orig;
@@ -817,6 +966,188 @@ void ROSWrapper::pub_cloud_world(const CloudPtr& pc, double time){
   cloud.header.frame_id = "world";
   cloud.header.stamp = toRosTime(time);
   pub_cloud_world_->publish(cloud);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布回环边 + 优化后的关键帧轨迹
+// ============================================================
+void ROSWrapper::pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
+                                  const std::vector<LoopEdgeInfo>& edges){
+  if(keyframe_poses.empty()) return;
+
+  const builtin_interfaces::msg::Time stamp = this->now();
+
+  // ---- 回环节点 (SPHERE_LIST) ----
+  visualization_msgs::msg::Marker marker_node;
+  marker_node.header.frame_id = "world";
+  marker_node.header.stamp = stamp;
+  marker_node.action = visualization_msgs::msg::Marker::ADD;
+  marker_node.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+  marker_node.ns = "loop_nodes";
+  marker_node.id = 0;
+  marker_node.pose.orientation.w = 1;
+  marker_node.scale.x = 0.3;
+  marker_node.scale.y = 0.3;
+  marker_node.scale.z = 0.3;
+  marker_node.color.r = 0.0f;
+  marker_node.color.g = 0.8f;
+  marker_node.color.b = 1.0f;
+  marker_node.color.a = 1.0f;
+
+  // ---- 回环边 (LINE_LIST) ----
+  visualization_msgs::msg::Marker marker_edge;
+  marker_edge.header.frame_id = "world";
+  marker_edge.header.stamp = stamp;
+  marker_edge.action = visualization_msgs::msg::Marker::ADD;
+  marker_edge.type = visualization_msgs::msg::Marker::LINE_LIST;
+  marker_edge.ns = "loop_edges";
+  marker_edge.id = 1;
+  marker_edge.pose.orientation.w = 1;
+  marker_edge.scale.x = 0.1;
+  marker_edge.color.r = 0.9f;
+  marker_edge.color.g = 0.9f;
+  marker_edge.color.b = 0.0f;
+  marker_edge.color.a = 1.0f;
+
+  for(const auto& edge : edges){
+    if(edge.from_index >= keyframe_poses.size() ||
+       edge.to_index >= keyframe_poses.size()) continue;
+
+    const BASIC::SE3& pose_from = keyframe_poses[edge.from_index];
+    const BASIC::SE3& pose_to = keyframe_poses[edge.to_index];
+
+    geometry_msgs::msg::Point p_from, p_to;
+    p_from.x = pose_from.t_.x();
+    p_from.y = pose_from.t_.y();
+    p_from.z = pose_from.t_.z();
+    p_to.x = pose_to.t_.x();
+    p_to.y = pose_to.t_.y();
+    p_to.z = pose_to.t_.z();
+
+    marker_node.points.push_back(p_from);
+    marker_node.points.push_back(p_to);
+    marker_edge.points.push_back(p_from);
+    marker_edge.points.push_back(p_to);
+  }
+
+  if(!marker_edge.points.empty()){
+    // 发 MarkerArray (节点 + 边), 与 fastlio_sam 的
+    // /fast_lio_sam/mapping/loop_closure_constraints 一致:
+    //   一个 topic 里装两个 marker, RViz 用 MarkerArray 显示类订阅.
+    visualization_msgs::msg::MarkerArray marker_array;
+    marker_array.markers.push_back(marker_node);
+    marker_array.markers.push_back(marker_edge);
+    pub_loop_markers_->publish(marker_array);
+  }
+
+  // ---- 优化后的关键帧轨迹 ----
+  nav_msgs::msg::Path loop_path;
+  loop_path.header.frame_id = "world";
+  loop_path.header.stamp = stamp;
+  loop_path.poses.reserve(keyframe_poses.size());
+  for(const auto& pose : keyframe_poses){
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header = loop_path.header;
+    ps.pose.position.x = pose.t_.x();
+    ps.pose.position.y = pose.t_.y();
+    ps.pose.position.z = pose.t_.z();
+    // 注意: M3::coeffs() 是矩阵展开, 不是四元数, 必须走 SO3::coeffs().
+    const BASIC::V4 q = BASIC::SO3(pose.R_).coeffs();
+    ps.pose.orientation.x = q[0];
+    ps.pose.orientation.y = q[1];
+    ps.pose.orientation.z = q[2];
+    ps.pose.orientation.w = q[3];
+    loop_path.poses.push_back(ps);
+  }
+  pub_loop_path_->publish(loop_path);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布"优化前"的关键帧轨迹 (原始 ESKF 位姿)
+//   与 pub_loop_closure() 发的"优化后"轨迹叠在一起, 就能直接看出
+//   回环优化把漂移的轨迹拉回了多少.
+// ============================================================
+void ROSWrapper::pub_loop_path_before(const std::vector<BASIC::SE3>& odom_poses){
+  if(odom_poses.empty()) return;
+
+  nav_msgs::msg::Path path_before;
+  path_before.header.frame_id = "world";
+  path_before.header.stamp = this->now();
+  path_before.poses.reserve(odom_poses.size());
+  for(const auto& pose : odom_poses){
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header = path_before.header;
+    ps.pose.position.x = pose.t_.x();
+    ps.pose.position.y = pose.t_.y();
+    ps.pose.position.z = pose.t_.z();
+    const BASIC::V4 q = BASIC::SO3(pose.R_).coeffs();
+    ps.pose.orientation.x = q[0];
+    ps.pose.orientation.y = q[1];
+    ps.pose.orientation.z = q[2];
+    ps.pose.orientation.w = q[3];
+    path_before.poses.push_back(ps);
+  }
+  pub_loop_path_before_->publish(path_before);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布优化后的全局地图 (关键帧重拼接)
+//   对应 fastlio_sam 的 fast_lio_sam/mapping/map_global_optimized
+// ============================================================
+void ROSWrapper::pub_loop_map_optimized(const BASIC::CloudPtr& cloud){
+  if(!cloud || cloud->empty()) return;
+
+  sensor_msgs::msg::PointCloud2 msg;
+  pcl::toROSMsg(*cloud, msg);
+  msg.header.frame_id = "world";
+  msg.header.stamp = this->now();
+  pub_loop_map_optimized_->publish(msg);
+}
+
+
+// ============================================================
+// [LOOP-CLOSURE] 发布 ICP 匹配的点云
+//   history_cloud  : 历史 submap (世界系)
+//   corrected_cloud: 当前帧经 ICP 修正后的点云 (世界系)
+//   raw_cloud      : 当前帧修正前的点云 (世界系)
+// 对应 fastlio_sam 的:
+//   fast_lio_sam/mapping/icp_loop_closure_history_cloud
+//   fast_lio_sam/mapping/icp_loop_closure_corrected_cloud
+// ============================================================
+void ROSWrapper::pub_loop_icp_clouds(
+    const pcl::PointCloud<pcl::PointXYZI>& history_cloud,
+    const pcl::PointCloud<pcl::PointXYZI>& corrected_cloud,
+    const pcl::PointCloud<pcl::PointXYZI>& raw_cloud){
+  const builtin_interfaces::msg::Time stamp = this->now();
+
+  if(!history_cloud.empty()){
+    sensor_msgs::msg::PointCloud2 msg;
+    pcl::toROSMsg(history_cloud, msg);
+    msg.header.frame_id = "world";
+    msg.header.stamp = stamp;
+    pub_loop_icp_history_->publish(msg);
+  }
+
+  if(!corrected_cloud.empty()){
+    sensor_msgs::msg::PointCloud2 msg;
+    pcl::toROSMsg(corrected_cloud, msg);
+    msg.header.frame_id = "world";
+    msg.header.stamp = stamp;
+    pub_loop_icp_corrected_->publish(msg);
+  }
+
+  // raw_cloud (修正前) 发到独立 topic.
+  // 这样在 RViz 里把 corrected + raw 都加上, 直接看到 ICP 把当前帧搬了多远.
+  if(!raw_cloud.empty()){
+    sensor_msgs::msg::PointCloud2 msg;
+    pcl::toROSMsg(raw_cloud, msg);
+    msg.header.frame_id = "world";
+    msg.header.stamp = stamp;
+    pub_loop_icp_raw_->publish(msg);
+  }
 }
 
 

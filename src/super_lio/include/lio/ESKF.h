@@ -80,6 +80,26 @@ public:
 
   void SetX(const SysState& x);
 
+  /// [LOOP-CLOSURE] 回环优化结果回写.
+  ///
+  /// 用位姿图优化后的位姿直接覆盖 ESKF 当前状态.
+  ///
+  /// 注意: 不能用 SetX().
+  ///   SetX() 会改写 last_imu_time_, 破坏 IMU 递推的时间基准
+  ///   (下一次 Predict 计算出的 dt 会突变),
+  ///   因此不能用于回环优化后的状态回写.
+  ///
+  /// CorrectPose() 只修改"当前时刻的位姿/速度", 保持时间基准不动:
+  ///   - R_ / p_ / v_ : 后验状态
+  ///   - fw_R_ / fw_p_ / fw_v_ : 前向递推状态 (同步, 避免前向预测跳变)
+  ///   - 不动 last_imu_time_ / current_time_ / last_obs_time_ / fw_last_integr_time_
+  ///
+  /// @param R_new 优化后的姿态 (body -> world)
+  /// @param p_new 优化后的位置 (world 系)
+  /// @param R_old 优化前的姿态 (body -> world), 保留用于诊断
+  void CorrectPose(const BASIC::SO3& R_new, const BASIC::V3& p_new,
+                   const BASIC::SO3& R_old);
+
   void SetCov(const COV& cov){ P_ = cov; }
 
   BASIC::V3 GetGravity() const { return g_; }
@@ -87,7 +107,7 @@ public:
   bool init_ = false;
   bool Predict(const IMUData& imu, DynamicState& state_imu, DynamicState& state_robot);
 
-  /// 前向 (纯 IMU) 递推的锚点通知.
+  /// [ALIGN-FastLIVO2] 前向 (纯 IMU) 递推的锚点通知.
   /// 在 EKF 更新完成 (后验速度 v_ 已确定) 后调用:
   ///   - 把前向状态重置到当前后验 (fw_R_/fw_p_/fw_v_)
   ///   - 丢弃缓冲中早于锚点时刻的 IMU
@@ -96,7 +116,7 @@ public:
   /// 而不是用单条 acc 外推一大段 dt (那样每个 LIO 帧都会向速度注入一个尖峰).
   void NotifyForwardAnchor(double anchor_time);
 
-  /// 前向递推 (纯 IMU 推算) 的单步推进.
+  /// [ALIGN-FastLIVO2] 前向递推 (纯 IMU 推算) 的单步推进.
   /// 与 Predict(imu, state_imu, state_robot) 等价, 但改为:
   ///   1) 维护独立的递推 IMU 缓冲, 锚点后逐条重积分;
   ///   2) 姿态采用半隐式 (先用新姿态转加速度), 与 FastLIVO2 的 prop_imu_once 一致.
@@ -106,7 +126,19 @@ private:
   void BuildNoise(const Options& options);
   void Update();
 
-  /// 前向递推的单步积分 (半隐式, 与 prop_imu_once 同构).
+  /// [BUG FIX] 重正交化.
+  ///
+  /// 背景: ESKF 的 R_ 是 float 精度的矩阵, 长时间 IMU 递推后
+  ///   R_ * R_.transpose() 会有 ~1e-7 的误差累积, 严格来说不再是 SO(3).
+  ///   转成 gtsam::Rot3 参与非线性优化时, 这个微小偏差会被放大,
+  ///   最终导致 GTSAM 抛出 IndeterminantLinearSystemException.
+  ///
+  /// 对齐 fastlio_sam: 它的 ESKF 状态本来就存四元数, 天生不会漂.
+  ///
+  /// 做法: 经四元数中转, 归一化后再转回矩阵.
+  void NormalizeRotation();
+
+  /// [ALIGN-FastLIVO2] 前向递推的单步积分 (半隐式, 与 prop_imu_once 同构).
   /// dt  : 本步的时间长度
   /// acc : 本步使用的加速度 (body 系, 已缩放/去偏置前)
   /// gyr : 本步使用的角速度 (body 系, 已去偏置前)
@@ -138,13 +170,13 @@ private:
 
   Options options_;
 
-  //  前向递推状态 (对应 FastLIVO2 的 imu_propagate).
+  // [ALIGN-FastLIVO2] 前向递推状态 (对应 FastLIVO2 的 imu_propagate).
   BASIC::SO3 fw_R_;
   BASIC::V3 fw_p_ = BASIC::V3::Zero();
   BASIC::V3 fw_v_ = BASIC::V3::Zero();
 
   // ============================================================
-  //  前向递推专用状态
+  // [ALIGN-FastLIVO2] 前向递推专用状态
   //   对应 FastLIVO2 的 prop_imu_buffer / state_update_flg / latest_ekf_state.
   //   注意: 不能复用 ROSWrapper 的 imu_buffer_, 那个 buffer 会被
   //   sync_measure() 抽干并交给 EKF 去畸变, 前向递推需要保留一份副本.

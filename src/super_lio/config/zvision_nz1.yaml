@@ -14,7 +14,7 @@
     lio.sensor.blind: 0.8                 #雷达盲区
     lio.sensor.maxrange: 100.0            #雷达最大距离
     lio.sensor.filter_rate: 1             #雷达滤波率
-    lio.sensor.enable_downsample: false   #lio中是否降采样，false不降采样，true降采样
+    lio.sensor.enable_downsample: true   #lio中是否降采样，false不降采样，true降采样
     lio.sensor.voxel_fliter_size: 0.5     #lio中降采样参数
     lio.sensor.gravity_norm: 9.81       #重力加速度
     lio.sensor.imu_type: 1                #IMU类型，默认6轴
@@ -60,3 +60,91 @@
     lio.output.imu_odom_pub_divider: 2
 
     lio.eva.timer: true    #是否开启评估计时器，true开启，false关闭
+
+    # ============================================================
+    # [LOOP-CLOSURE] 回环检测 + GTSAM 位姿图优化
+    #   enable: false 时行为与原来完全一致 (不启动回环线程).
+    #
+    #   注意: exclude_recent 决定了"走多远才可能触发回环".
+    #   关键帧间距 ~1m, exclude_recent=30 => 至少要走出 30m
+    #   才会拿当前帧去和 30 帧之前的关键帧比较.
+    #   在小场景来回走动时, 如果一直不触发, 优先调小它 (比如 10).
+    # ============================================================
+    lio.loop_closure.enable: true
+    lio.loop_closure.frequency: 2.0          # 回环检测线程频率 (Hz)
+
+    # 关键帧判定阈值 (位移与角度, 满足其一即建关键帧)
+    lio.loop_closure.keyframe_dist: 1.0       # m
+    lio.loop_closure.keyframe_angle: 0.2      # rad
+
+    # Scan Context 描述子
+    lio.loop_closure.sc_num_rings: 20
+    lio.loop_closure.sc_num_sectors: 60
+    lio.loop_closure.sc_max_radius: 80.0
+    lio.loop_closure.sc_lidar_height: 2.0
+    lio.loop_closure.sc_exclude_recent: 30    # 排除最近 N 个关键帧
+    lio.loop_closure.sc_num_candidates: 10
+    lio.loop_closure.sc_search_ratio: 0.1
+    lio.loop_closure.sc_distance_threshold: 0.15
+
+    # ICP 几何验证
+    #
+    # icp_fitness_score_threshold 说明:
+    #   PCL 的 getFitnessScore() 是【平方距离的均值】, 单位 m^2, 不是米!
+    #   所以阈值要开方才是实际的 RMS 对齐误差:
+    #     0.6 -> RMS 0.77m   (很松)
+    #     0.3 -> RMS 0.55m   (与 fastlio_sam_sc 一致)
+    #     0.15-> RMS 0.39m
+    #   收紧 = 只接受匹配得更准的回环 (误检↓, 但漏检↑).
+    #   同时它还决定 GTSAM 因子的权重:
+    #     因子 sigma = sqrt(fitness), 所以接受的回环约束更强.
+    #
+    # icp_max_correspondence_distance 说明:
+    #   ICP 找最近邻的搜索半径 (m).
+    #   我们 icp_history_search_num=5 => submap 共 11 帧、跨度 ~11m,
+    #   所以 15m 足够覆盖. (fastlio_sam_sc 用 150 是因为它 submap 有 51 帧.)
+    lio.loop_closure.icp_max_correspondence_distance: 15
+    lio.loop_closure.icp_max_iterations: 100
+    lio.loop_closure.icp_fitness_score_threshold: 0.3
+    # 前后各取几个关键帧拼 submap (共 11 帧).
+    #   fastlio_sam_sc 用 25 (共 51 帧). 我们保持 5:
+    #   submap 越大 ICP 越容易匹配上 (fitness 天然更低), 会削弱阈值的过滤作用.
+    lio.loop_closure.icp_history_search_num: 5
+
+    # GTSAM 位姿图噪声 (1-sigma)
+    lio.loop_closure.pg_odom_rot_sigma: 0.001
+    lio.loop_closure.pg_odom_trans_sigma: 0.01
+    lio.loop_closure.pg_loop_rot_sigma: 0.005
+    lio.loop_closure.pg_loop_trans_sigma: 0.05
+    lio.loop_closure.pg_prior_rot_sigma: 0.000001
+    lio.loop_closure.pg_prior_trans_sigma: 0.000001
+
+    # 回环后是否把优化位姿回写到前端 ESKF
+    lio.loop_closure.writeback_enable: true
+    # 退出时是否用关键帧重拼接保存地图 (与优化后位姿完全对齐)
+    lio.loop_closure.keyframe_map_enable: true
+
+    # ============================================================
+    # [DIAG] 位姿图残差诊断
+    # ============================================================
+    # 只在【含回环】的优化后打印 (纯里程计增量优化不打印, 否则刷屏).
+    lio.loop_closure.diag_enable: true
+
+    # ============================================================
+    # 回环可视化
+    #   注意: 开关只控制【重负载】的部分,
+    #   回环的 marker (节点+边) 和优化前/后轨迹【始终发布】,
+    #   因为那是判断"回环有没有生效"最直观的信息, 而开销只有几十个点.
+    # ============================================================
+    # visual_enable: false 时不发布:
+    #   /lio/loop_map_optimized      (优化后的全局地图, 开销最大)
+    #   /lio/loop_icp_history_cloud  (ICP 历史 submap)
+    #   /lio/loop_icp_corrected_cloud (ICP 修正后的当前帧)
+    #   /lio/loop_icp_raw_cloud       (ICP 修正前的当前帧)
+    # 回环检测与位姿图优化照常工作, CPU 吃紧时关掉.
+    lio.loop_closure.visual_enable: false
+
+    # "优化后全局地图"的发布间隔 (帧).
+    #   这项要把【所有】关键帧点云变换一遍再降采样, 开销最大,
+    #   所以默认 50 帧一次 (10Hz LiDAR 下约 0.2Hz).
+    lio.loop_closure.visual_map_interval: 50

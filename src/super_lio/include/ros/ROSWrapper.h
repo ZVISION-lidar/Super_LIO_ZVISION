@@ -74,6 +74,13 @@ void LoadParamFromRos(rclcpp::Node& node);
 
 void livox2pcl(const livox_ros_driver2::msg::CustomMsg::SharedPtr& msg, BASIC::CloudPtr& point_cloud);
 
+/// 一条回环边 (用于可视化).
+struct LoopEdgeInfo {
+  std::size_t from_index = 0;
+  std::size_t to_index = 0;
+  double fitness_score = 0.0;
+};
+
 class ROSWrapper : public rclcpp::Node {
 public:
   explicit ROSWrapper(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
@@ -112,6 +119,22 @@ public:
   void pub_cloud_body_pose( const BASIC::VV3& pc_body,
                             const NavState& state);  
   void pub_processing_time(double time, double current_time, double mean_time, double std_time);
+
+  // ============================================================
+  // [LOOP-CLOSURE] 回环可视化
+  // ============================================================
+  /// 发布回环 marker (节点+边) 与优化后的关键帧轨迹.
+  void pub_loop_closure(const std::vector<BASIC::SE3>& keyframe_poses,
+                        const std::vector<LoopEdgeInfo>& edges);
+  /// 发布"优化前"的关键帧轨迹 (原始 ESKF 位姿), 与优化后的对比.
+  void pub_loop_path_before(const std::vector<BASIC::SE3>& odom_poses);
+  /// 发布优化后的全局地图 (关键帧重拼接).
+  void pub_loop_map_optimized(const BASIC::CloudPtr& cloud);
+  /// 发布 ICP 匹配的点云 (历史 submap / 修正后 / 修正前).
+  void pub_loop_icp_clouds(
+      const pcl::PointCloud<pcl::PointXYZI>& history_cloud,
+      const pcl::PointCloud<pcl::PointXYZI>& corrected_cloud,
+      const pcl::PointCloud<pcl::PointXYZI>& raw_cloud);
 
   void set_global_map(const BASIC::CloudPtr& global_map);
 
@@ -272,6 +295,7 @@ private:
   bool imu_filt_initialized_ = false;
 
   /// 滤波器参数（可由配置文件覆盖）
+  /// [默认关闭] 滤波会引入相位延迟, 且与 FastLIVO2 的裸 IMU 直推行为不一致.
   bool imu_notch_enable_ = false;  ///< 陷波开关
   bool imu_lp_enable_ = false;     ///< 低通开关
   double imu_filt_fs_ = 197.98;   ///< IMU 采样率 (Hz)
@@ -293,6 +317,22 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_robo_odom_;  /// IMU fre   --> Robot frame
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_world_;
+
+  // ============================================================
+  // [LOOP-CLOSURE] 回环可视化 publisher
+  // ============================================================
+  /// 回环节点 + 回环边 (MarkerArray)
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_loop_markers_;
+  /// 优化后的关键帧轨迹
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_loop_path_;
+  /// 优化前的关键帧轨迹 (原始 ESKF 位姿)
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_loop_path_before_;
+  /// 优化后的全局地图 (关键帧重拼接)
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_loop_map_optimized_;
+  /// ICP 匹配的点云
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_loop_icp_history_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_loop_icp_corrected_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_loop_icp_raw_;
 };
 
 } // namespace END.
